@@ -1,4 +1,4 @@
-import type { UploadedFile } from "./types";
+import type { UploadedFile } from "@/modules/types";
 
 export const SAMPLE_FILES: UploadedFile[] = [
   {

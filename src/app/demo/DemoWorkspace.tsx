@@ -3,14 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Papa from "papaparse";
+import { type FileTypeKey, type UploadedFile } from "@/modules/types";
 import {
-  FILE_TYPES,
-  FILE_TYPE_LABELS,
-  type FileTypeKey,
-  type UploadedFile,
-} from "@/lib/types";
-import { SAMPLE_FILES } from "@/lib/sample-data";
-import { consolidate, formatAmount, toCsv } from "@/lib/consolidation";
+  FilesPanel,
+  ResultTable,
+  consolidate,
+  guessType,
+  toCsv,
+} from "@/modules/consolidation";
+import { SAMPLE_FILES } from "@/samples/sample-data";
 
 const REQUIRED_COLS = ["표준계정과목코드", "표준계정과목명", "금액"] as const;
 
@@ -180,160 +181,6 @@ export default function DemoWorkspace() {
 
       <FormatHint />
     </div>
-  );
-}
-
-function guessType(filename: string): FileTypeKey {
-  const n = filename.toLowerCase();
-  if (n.includes("내부거래") || n.includes("b2")) return "B2";
-  if (n.includes("연결조정") || n.includes("b1")) return "B1";
-  if (n.includes("자회사2") || n.includes("a3")) return "A3";
-  if (n.includes("자회사1") || n.includes("자회사") || n.includes("a2"))
-    return "A2";
-  return "A1";
-}
-
-function FilesPanel({
-  files,
-  onChangeType,
-  onRemove,
-}: {
-  files: UploadedFile[];
-  onChangeType: (id: string, type: FileTypeKey) => void;
-  onRemove: (id: string) => void;
-}) {
-  if (files.length === 0) return null;
-  return (
-    <div className="mt-6 rounded-2xl border border-slate-200 bg-white">
-      <div className="border-b border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700">
-        업로드된 파일 ({files.length})
-      </div>
-      <ul className="divide-y divide-slate-100">
-        {files.map((f) => (
-          <li
-            key={f.id}
-            className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm"
-          >
-            <span className="font-mono text-xs text-slate-500">
-              {f.rows.length}행
-            </span>
-            <span className="font-medium text-slate-900">{f.name}</span>
-            <select
-              value={f.type}
-              onChange={(e) => onChangeType(f.id, e.target.value as FileTypeKey)}
-              className="ml-auto rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
-            >
-              {FILE_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t} · {FILE_TYPE_LABELS[t]}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => onRemove(f.id)}
-              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-              aria-label="제거"
-            >
-              ✕
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function ResultTable({
-  rows,
-}: {
-  rows: ReturnType<typeof consolidate>;
-}) {
-  if (rows.length === 0) {
-    return (
-      <p className="mt-4 text-sm text-slate-500">
-        업로드된 파일에 유효한 데이터가 없습니다.
-      </p>
-    );
-  }
-  return (
-    <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-      <table className="min-w-full text-sm">
-        <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
-          <tr>
-            <Th>코드</Th>
-            <Th>계정과목</Th>
-            <Th align="right" highlight>
-              연결후금액
-            </Th>
-            <Th align="right">B2 내부거래제거</Th>
-            <Th align="right">B1 연결조정</Th>
-            <Th align="right">별도단순합산</Th>
-            <Th align="right">A1 모회사</Th>
-            <Th align="right">A2 자회사1</Th>
-            <Th align="right">A3 자회사2</Th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {rows.map((r) => (
-            <tr key={r.표준계정과목코드} className="hover:bg-slate-50">
-              <Td mono>{r.표준계정과목코드}</Td>
-              <Td>{r.표준계정과목명}</Td>
-              <Td align="right" highlight>
-                {formatAmount(r.연결후금액)}
-              </Td>
-              <Td align="right">{formatAmount(r.B2)}</Td>
-              <Td align="right">{formatAmount(r.B1)}</Td>
-              <Td align="right">{formatAmount(r.별도단순합산)}</Td>
-              <Td align="right">{formatAmount(r.A1)}</Td>
-              <Td align="right">{formatAmount(r.A2)}</Td>
-              <Td align="right">{formatAmount(r.A3)}</Td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function Th({
-  children,
-  align,
-  highlight,
-}: {
-  children: React.ReactNode;
-  align?: "right";
-  highlight?: boolean;
-}) {
-  return (
-    <th
-      className={`px-3 py-2 font-semibold ${
-        align === "right" ? "text-right" : "text-left"
-      } ${highlight ? "bg-blue-50 text-blue-700" : ""}`}
-    >
-      {children}
-    </th>
-  );
-}
-
-function Td({
-  children,
-  align,
-  mono,
-  highlight,
-}: {
-  children: React.ReactNode;
-  align?: "right";
-  mono?: boolean;
-  highlight?: boolean;
-}) {
-  return (
-    <td
-      className={`px-3 py-2 ${align === "right" ? "text-right" : ""} ${
-        mono ? "font-mono text-xs text-slate-500" : ""
-      } ${highlight ? "bg-blue-50 font-semibold text-blue-700" : ""}`}
-    >
-      {children}
-    </td>
   );
 }
 

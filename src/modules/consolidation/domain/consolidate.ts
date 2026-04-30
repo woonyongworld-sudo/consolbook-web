@@ -3,8 +3,8 @@ import type {
   ConsolidatedRow,
   FileTypeKey,
   UploadedFile,
-} from "./types";
-import { FILE_TYPES } from "./types";
+} from "@/modules/types";
+import { FILE_TYPES } from "@/modules/types";
 
 type AmountByType = Record<FileTypeKey, number>;
 
