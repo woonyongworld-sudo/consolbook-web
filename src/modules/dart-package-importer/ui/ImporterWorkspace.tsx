@@ -456,6 +456,16 @@ function BundleReportPanel({
           </li>
         ))}
       </ul>
+      <div className="mt-4 rounded-lg border border-emerald-300 bg-white p-3 text-xs text-slate-700">
+        💡 다운받은 .zip을 풀어서 각 회사 .xlsx를{" "}
+        <a
+          href="/validation"
+          className="font-medium text-blue-600 underline hover:text-blue-700"
+        >
+          검증 페이지
+        </a>
+        에 올리면 BS 차대일치·자본 정합성 등 시트 간 정합성을 자동 점검합니다.
+      </div>
     </div>
   );
 }
