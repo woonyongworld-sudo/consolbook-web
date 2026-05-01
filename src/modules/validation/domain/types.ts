@@ -21,6 +21,13 @@ export type Issue = {
   expected?: number | string;
   actual?: number | string;
   diff?: number;
+  // v4: 사용자 액션 힌트 — 검증 화면에서 "매핑 등록" 등 인라인 액션 노출용
+  action?: {
+    type: "register_mapping";
+    list_key: string; // 어느 마스터에 매핑
+    external_value: string; // 외부 양식의 원래 값
+    suggested_code?: string; // 자동 추론한 표준 코드 (있으면)
+  };
 };
 
 export type ValidationContext = {

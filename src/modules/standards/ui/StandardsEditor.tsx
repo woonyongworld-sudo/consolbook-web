@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   useDictionary,
+  type AccountMapping,
   type HeaderValidation,
   type ListItem,
   type ListMaster,
@@ -14,7 +15,7 @@ import {
 
 const DATA_TYPES: StandardDataType[] = ["text", "number", "code", "enum"];
 
-type Mode = "sheets" | "lists";
+type Mode = "sheets" | "lists" | "mappings";
 
 export default function StandardsEditor() {
   const { dict, setDict, reset } = useDictionary();
@@ -144,7 +145,7 @@ export default function StandardsEditor() {
                   : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              시트 유형 ({dict.sheets.length})
+              시트 ({dict.sheets.length})
             </button>
             <button
               onClick={() => setMode("lists")}
@@ -154,11 +155,26 @@ export default function StandardsEditor() {
                   : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              목록 마스터 ({dict.lists.length})
+              마스터 ({dict.lists.length})
+            </button>
+            <button
+              onClick={() => setMode("mappings")}
+              className={`flex-1 rounded px-2 py-1 ${
+                mode === "mappings"
+                  ? "bg-white font-semibold text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              매핑 ({dict.accountMappings.length})
+              {pendingCount(dict) > 0 && (
+                <span className="ml-1 rounded bg-amber-200 px-1 text-amber-900">
+                  미확정 {pendingCount(dict)}
+                </span>
+              )}
             </button>
           </div>
 
-          {mode === "sheets" ? (
+          {mode === "sheets" && (
             <SheetTypeList
               sheets={dict.sheets}
               selected={selectedSheetType}
@@ -166,7 +182,8 @@ export default function StandardsEditor() {
               onAdd={addSheetType}
               onRemove={removeSheetType}
             />
-          ) : (
+          )}
+          {mode === "lists" && (
             <ListMasterList
               lists={dict.lists}
               selected={selectedListKey}
@@ -175,23 +192,32 @@ export default function StandardsEditor() {
               onRemove={removeList}
             />
           )}
+          {mode === "mappings" && (
+            <p className="text-xs text-slate-500">
+              계정과목 매핑: 사용자가 검증 화면에서 등록하거나, 여기서 수동
+              추가/확정/제거할 수 있습니다.
+            </p>
+          )}
         </aside>
 
         <main>
-          {mode === "sheets" ? (
-            selectedSpec ? (
-              <SheetEditor
-                spec={selectedSpec}
-                dict={dict}
-                onChange={updateSpec}
-              />
+          {mode === "sheets" &&
+            (selectedSpec ? (
+              <SheetEditor spec={selectedSpec} dict={dict} onChange={updateSpec} />
             ) : (
               <EmptyHint label="좌측에서 시트 유형 선택 또는 + 추가" />
-            )
-          ) : selectedList ? (
-            <ListEditor list={selectedList} onChange={updateList} />
-          ) : (
-            <EmptyHint label="좌측에서 목록 마스터 선택 또는 + 추가" />
+            ))}
+          {mode === "lists" &&
+            (selectedList ? (
+              <ListEditor list={selectedList} onChange={updateList} />
+            ) : (
+              <EmptyHint label="좌측에서 목록 마스터 선택 또는 + 추가" />
+            ))}
+          {mode === "mappings" && (
+            <MappingsManager
+              dict={dict}
+              onChange={(next) => setDict({ ...dict, ...next })}
+            />
           )}
         </main>
       </div>
@@ -806,4 +832,202 @@ function stringToMeta(s: string): Record<string, string> | undefined {
 
 function Label({ children }: { children: React.ReactNode }) {
   return <span className="self-center text-sm text-slate-600">{children}</span>;
+}
+
+function pendingCount(dict: StandardDictionary): number {
+  return dict.accountMappings.filter((m) => m.status === "pending").length;
+}
+
+// === 매핑 관리 ===
+function MappingsManager({
+  dict,
+  onChange,
+}: {
+  dict: StandardDictionary;
+  onChange: (patch: Partial<StandardDictionary>) => void;
+}) {
+  const pending = dict.accountMappings.filter((m) => m.status === "pending");
+  const confirmed = dict.accountMappings.filter(
+    (m) => m.status === "confirmed",
+  );
+
+  function updateMapping(id: string, patch: Partial<AccountMapping>) {
+    onChange({
+      accountMappings: dict.accountMappings.map((m) =>
+        m.id === id ? { ...m, ...patch } : m,
+      ),
+    });
+  }
+  function confirmMapping(id: string) {
+    updateMapping(id, {
+      status: "confirmed",
+      confirmed_at: new Date().toISOString(),
+      confirmed_by: "admin",
+    });
+  }
+  function unconfirmMapping(id: string) {
+    updateMapping(id, {
+      status: "pending",
+      confirmed_at: undefined,
+      confirmed_by: undefined,
+    });
+  }
+  function removeMapping(id: string) {
+    if (!confirm("이 매핑을 삭제하시겠습니까?")) return;
+    onChange({
+      accountMappings: dict.accountMappings.filter((m) => m.id !== id),
+    });
+  }
+  function confirmAllPending() {
+    if (pending.length === 0) return;
+    if (!confirm(`미확정 ${pending.length}건을 모두 확정하시겠습니까?`)) return;
+    onChange({
+      accountMappings: dict.accountMappings.map((m) =>
+        m.status === "pending"
+          ? {
+              ...m,
+              status: "confirmed",
+              confirmed_at: new Date().toISOString(),
+              confirmed_by: "admin",
+            }
+          : m,
+      ),
+    });
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* 미확정 */}
+      <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-amber-900">
+            미확정 매핑 ({pending.length})
+          </h3>
+          {pending.length > 0 && (
+            <button
+              onClick={confirmAllPending}
+              className="rounded bg-amber-700 px-3 py-1 text-xs text-white hover:bg-amber-800"
+            >
+              모두 확정
+            </button>
+          )}
+        </div>
+        {pending.length === 0 ? (
+          <p className="text-xs text-amber-800">
+            검토 대기 중인 매핑이 없습니다.
+          </p>
+        ) : (
+          <MappingTable
+            mappings={pending}
+            dict={dict}
+            onConfirm={confirmMapping}
+            onRemove={removeMapping}
+            showConfirmAction
+          />
+        )}
+      </section>
+
+      {/* 확정 */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <h3 className="mb-3 text-sm font-semibold text-slate-900">
+          확정 매핑 ({confirmed.length})
+        </h3>
+        {confirmed.length === 0 ? (
+          <p className="text-xs text-slate-500">확정된 매핑이 없습니다.</p>
+        ) : (
+          <MappingTable
+            mappings={confirmed}
+            dict={dict}
+            onUnconfirm={unconfirmMapping}
+            onRemove={removeMapping}
+          />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function MappingTable({
+  mappings,
+  dict,
+  onConfirm,
+  onUnconfirm,
+  onRemove,
+  showConfirmAction = false,
+}: {
+  mappings: AccountMapping[];
+  dict: StandardDictionary;
+  onConfirm?: (id: string) => void;
+  onUnconfirm?: (id: string) => void;
+  onRemove: (id: string) => void;
+  showConfirmAction?: boolean;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+      <table className="min-w-full text-xs">
+        <thead className="bg-slate-50 text-slate-600">
+          <tr>
+            <th className="px-3 py-2 text-left">외부 값</th>
+            <th className="px-3 py-2 text-left">→ 표준 코드</th>
+            <th className="px-3 py-2 text-left">마스터</th>
+            <th className="px-3 py-2 text-left">출처</th>
+            <th className="px-3 py-2 text-left">생성일시</th>
+            <th className="px-3 py-2 text-right">액션</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {mappings.map((m) => {
+            const list = dict.lists.find((l) => l.key === m.list_key);
+            const item = list?.items.find((it) => it.code === m.standard_code);
+            return (
+              <tr key={m.id}>
+                <td className="px-3 py-2 font-mono text-slate-900">
+                  {m.external_value}
+                </td>
+                <td className="px-3 py-2">
+                  <span className="font-mono text-slate-900">
+                    {m.standard_code}
+                  </span>
+                  {item && (
+                    <span className="ml-2 text-slate-500">{item.label}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-slate-500">
+                  {list?.label ?? m.list_key}
+                </td>
+                <td className="px-3 py-2 text-slate-500">{m.source ?? "-"}</td>
+                <td className="px-3 py-2 font-mono text-slate-400">
+                  {m.created_at.slice(0, 10)}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {showConfirmAction && onConfirm && (
+                    <button
+                      onClick={() => onConfirm(m.id)}
+                      className="mr-1 rounded bg-emerald-600 px-2 py-0.5 text-xs text-white hover:bg-emerald-700"
+                    >
+                      확정
+                    </button>
+                  )}
+                  {!showConfirmAction && onUnconfirm && (
+                    <button
+                      onClick={() => onUnconfirm(m.id)}
+                      className="mr-1 rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50"
+                    >
+                      미확정으로
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onRemove(m.id)}
+                    className="rounded p-0.5 text-rose-500 hover:bg-rose-50"
+                  >
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }

@@ -18,7 +18,15 @@ export function loadDictionary(): StandardDictionary {
     if (!parsed || !Array.isArray(parsed.sheets)) return DEFAULT_DICTIONARY;
     // v3 호환성: lists 필드 없는 구버전 사전이면 디폴트 마스터 보충
     if (!Array.isArray(parsed.lists)) {
-      return { ...parsed, lists: DEFAULT_DICTIONARY.lists };
+      return {
+        ...parsed,
+        lists: DEFAULT_DICTIONARY.lists,
+        accountMappings: parsed.accountMappings ?? [],
+      };
+    }
+    // v4 호환성: accountMappings 없으면 빈 배열 추가
+    if (!Array.isArray(parsed.accountMappings)) {
+      return { ...parsed, accountMappings: [] };
     }
     return parsed;
   } catch {

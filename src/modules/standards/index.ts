@@ -6,6 +6,8 @@ export type {
   HeaderValidation,
   ListMaster,
   ListItem,
+  AccountMapping,
+  AccountMappingStatus,
 } from "./domain/types";
 
 export { DEFAULT_DICTIONARY } from "./data/default-dictionary";

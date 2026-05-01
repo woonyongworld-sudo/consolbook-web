@@ -272,13 +272,14 @@ function fmt(n: number): string {
   return n.toLocaleString("ko-KR");
 }
 
-// v3: 헤더의 validation 설정에 따라 데이터 값이 마스터/enum에 있는지 검사.
+// v4: 외부 값 → 마스터 직접 매치 → 매핑 테이블 lookup → 미매핑이면 이슈.
+// 매핑이 있으면 status(pending/confirmed) 무관하게 통과 (확정 검토는 관리자 영역).
 function headerListCheck(ctx: ValidationContext): RuleResult {
   const issues: Issue[] = [];
   const traces: RuleTrace[] = [];
   if (!ctx.dict) {
     traces.push({
-      formula: "외부 값 ∈ 표준 사전 마스터",
+      formula: "외부 값 ∈ 마스터 ∪ 매핑테이블",
       scope_label: "전체",
       inputs: [],
       computation: "표준 사전이 전달되지 않아 검증 스킵.",
@@ -287,8 +288,11 @@ function headerListCheck(ctx: ValidationContext): RuleResult {
     return { issues, traces };
   }
 
-  // 빠른 마스터 조회 인덱스 (key → Set<코드값>)
-  const masterIndex = new Map<string, { codes: Set<string>; labels: Set<string> }>();
+  // 마스터 인덱스
+  const masterIndex = new Map<
+    string,
+    { codes: Set<string>; labels: Set<string> }
+  >();
   for (const list of ctx.dict.lists) {
     masterIndex.set(list.key, {
       codes: new Set(list.items.map((it) => normalizeKor(it.code))),
@@ -296,11 +300,27 @@ function headerListCheck(ctx: ValidationContext): RuleResult {
     });
   }
 
+  // 매핑 테이블 인덱스: list_key → Map<normalized external_value, mapping>
+  const mappingIndex = new Map<
+    string,
+    Map<string, { code: string; status: string }>
+  >();
+  for (const m of ctx.dict.accountMappings) {
+    if (!mappingIndex.has(m.list_key)) {
+      mappingIndex.set(m.list_key, new Map());
+    }
+    mappingIndex
+      .get(m.list_key)!
+      .set(normalizeKor(m.external_value), {
+        code: m.standard_code,
+        status: m.status,
+      });
+  }
+
   for (const fs of ctx.fs) {
     const spec = ctx.dict.sheets.find((s) => s.type === fs.standardType);
     if (!spec) continue;
 
-    // validation 설정된 헤더만 검사
     const checkedHeaders = spec.headers.filter(
       (h) =>
         h.validation &&
@@ -311,7 +331,9 @@ function headerListCheck(ctx: ValidationContext): RuleResult {
     for (const header of checkedHeaders) {
       const v = header.validation!;
       let allowedSet: Set<string> | null = null;
+      let mapped: Map<string, { code: string; status: string }> | null = null;
       let scopeDesc = "";
+      let listKey: string | null = null;
 
       if (v.type === "list") {
         const idx = masterIndex.get(v.listKey);
@@ -326,65 +348,124 @@ function headerListCheck(ctx: ValidationContext): RuleResult {
           continue;
         }
         allowedSet = v.matchField === "label" ? idx.labels : idx.codes;
+        mapped = mappingIndex.get(v.listKey) ?? new Map();
         scopeDesc = `마스터[${v.listKey}.${v.matchField ?? "code"}]`;
+        listKey = v.listKey;
       } else if (v.type === "enum") {
         const enumVals = (header.enumValues ?? []).map(normalizeKor);
         if (enumVals.length === 0) continue;
         allowedSet = new Set(enumVals);
+        mapped = null;
         scopeDesc = `inline enum [${header.enumValues!.join(", ")}]`;
       }
 
       if (!allowedSet) continue;
 
-      // 행 단위 점검
-      const violatedRows: Array<{ row: number; value: string }> = [];
+      const directHits: string[] = [];
+      const mappedHits: Array<{
+        row: number;
+        value: string;
+        status: string;
+      }> = [];
+      const unmappedRows: Array<{ row: number; value: string }> = [];
+      let totalChecked = 0;
+
       for (const row of fs.rows) {
         const rawValue = pickValueForKey(row, header.key);
-        if (rawValue == null || rawValue === "") continue; // 빈 값은 별개 (필수 누락 룰 영역)
+        if (rawValue == null || rawValue === "") continue;
+        totalChecked++;
         const normalized = normalizeKor(String(rawValue));
-        if (!allowedSet.has(normalized)) {
-          violatedRows.push({ row: row.rowIndex, value: String(rawValue) });
+        if (allowedSet.has(normalized)) {
+          directHits.push(String(rawValue));
+          continue;
         }
+        if (mapped && mapped.has(normalized)) {
+          const m = mapped.get(normalized)!;
+          mappedHits.push({
+            row: row.rowIndex,
+            value: String(rawValue),
+            status: m.status,
+          });
+          continue;
+        }
+        unmappedRows.push({ row: row.rowIndex, value: String(rawValue) });
       }
 
-      const totalChecked = fs.rows.filter(
-        (r) => pickValueForKey(r, header.key) != null,
+      const okCount = directHits.length + mappedHits.length;
+      const pendingCount = mappedHits.filter(
+        (m) => m.status === "pending",
       ).length;
-      const okCount = totalChecked - violatedRows.length;
+      const isMatch = unmappedRows.length === 0;
+
+      const computationParts: string[] = [];
+      if (directHits.length > 0)
+        computationParts.push(`마스터 직접 일치 ${directHits.length}`);
+      if (mappedHits.length > 0)
+        computationParts.push(
+          `매핑 통과 ${mappedHits.length}${pendingCount > 0 ? ` (미확정 ${pendingCount})` : ""}`,
+        );
+      if (unmappedRows.length > 0)
+        computationParts.push(`미매핑 ${unmappedRows.length}`);
 
       traces.push({
-        formula: `${header.label} ∈ ${scopeDesc}`,
+        formula: v.type === "list"
+          ? `${header.label} ∈ 마스터 ∪ 매핑테이블`
+          : `${header.label} ∈ ${scopeDesc}`,
         scope_label: `${fs.sheetName} · ${header.label}`,
         inputs: [
-          { label: "검사 행 수", value: totalChecked },
-          { label: "통과", value: okCount },
-          { label: "위반", value: violatedRows.length },
+          { label: "검사 행", value: totalChecked },
+          { label: "마스터 직접", value: directHits.length },
+          { label: "매핑 통과", value: mappedHits.length },
+          { label: "미매핑", value: unmappedRows.length },
         ],
         computation:
-          violatedRows.length === 0
-            ? `${totalChecked}행 모두 마스터 값과 일치 ✓`
-            : `${violatedRows.length}건 불일치 — 예: ${violatedRows
+          unmappedRows.length === 0
+            ? `${totalChecked}행 모두 통과 (${computationParts.join(" / ")}) ✓`
+            : `${unmappedRows.length}건 미매핑 — 예: ${unmappedRows
                 .slice(0, 3)
-                .map((v) => `행 ${v.row} "${v.value}"`)
-                .join(", ")}${violatedRows.length > 3 ? ` 외 ${violatedRows.length - 3}건` : ""}`,
-        status: violatedRows.length === 0 ? "match" : "mismatch",
+                .map((u) => `행 ${u.row} "${u.value}"`)
+                .join(", ")}${unmappedRows.length > 3 ? ` 외 ${unmappedRows.length - 3}건` : ""}`,
+        status: isMatch ? "match" : "mismatch",
       });
 
-      // 행 단위 issue 발급 (최대 5건)
-      for (const v of violatedRows.slice(0, 5)) {
+      // 미매핑 행마다 issue (최대 5건 + 요약)
+      for (const u of unmappedRows.slice(0, 5)) {
         issues.push({
           rule_id: "HEADER_LIST_MEMBERSHIP",
           severity: "error",
-          message: `${fs.sheetName} 행 ${v.row}: "${header.label}" 값 "${v.value}"은(는) ${scopeDesc}에 없습니다.`,
-          ref: { sheet: fs.sheetName, row: v.row, account_nm: header.label },
-          actual: v.value,
+          message: `${fs.sheetName} 행 ${u.row}: "${header.label}" 값 "${u.value}"은(는) ${
+            v.type === "list" ? "마스터·매핑테이블" : scopeDesc
+          }에 없습니다.`,
+          ref: {
+            sheet: fs.sheetName,
+            row: u.row,
+            account_nm: header.label,
+          },
+          actual: u.value,
+          action: listKey
+            ? {
+                type: "register_mapping",
+                list_key: listKey,
+                external_value: u.value,
+              }
+            : undefined,
         });
       }
-      if (violatedRows.length > 5) {
+      if (unmappedRows.length > 5) {
         issues.push({
           rule_id: "HEADER_LIST_MEMBERSHIP",
           severity: "error",
-          message: `... 외 ${violatedRows.length - 5}건의 "${header.label}" 위반이 더 있습니다.`,
+          message: `... 외 ${unmappedRows.length - 5}건의 "${header.label}" 미매핑이 더 있습니다.`,
+          ref: { sheet: fs.sheetName, account_nm: header.label },
+        });
+      }
+
+      // 미확정 매핑 사용 알림 (info-style warning, 검증 통과는 됨)
+      if (pendingCount > 0) {
+        issues.push({
+          rule_id: "HEADER_LIST_MEMBERSHIP",
+          severity: "warning",
+          message: `${fs.sheetName} · "${header.label}": 미확정(pending) 매핑 ${pendingCount}건 사용 중. 관리자가 표준 사전에서 확정하세요.`,
           ref: { sheet: fs.sheetName, account_nm: header.label },
         });
       }

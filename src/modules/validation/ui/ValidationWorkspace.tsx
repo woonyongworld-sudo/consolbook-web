@@ -4,7 +4,11 @@ import { useRef, useState } from "react";
 import type { ValidationReport, RuleTrace, TraceInput } from "../domain/types";
 import type { DetectedSheet } from "../domain/sheet-mapper";
 import { SheetMappingPanel, type UserMapping } from "./SheetMappingPanel";
-import { useDictionary } from "@/modules/standards";
+import {
+  useDictionary,
+  type AccountMapping,
+  type ListMaster,
+} from "@/modules/standards";
 
 type FsSummary = {
   fs_div: "OFS" | "CFS";
@@ -98,8 +102,9 @@ export default function ValidationWorkspace() {
     }
   }
 
-  async function handleValidate() {
+  async function handleValidate(overrideDict?: typeof dict) {
     if (!fileBase64 || !mapping) return;
+    const useDict = overrideDict ?? dict;
     const validMappings = mapping
       .filter((m) => m.standardType && m.standardType !== "NOTE")
       .map((m) => ({
@@ -124,7 +129,7 @@ export default function ValidationWorkspace() {
         body: JSON.stringify({
           fileBase64,
           mappings: validMappings,
-          dict,
+          dict: useDict,
         }),
       });
       const data = await res.json();
@@ -231,7 +236,13 @@ export default function ValidationWorkspace() {
           </div>
         )}
 
-      {result && <ResultPanel result={result} filename={filename} />}
+      {result && (
+        <ResultPanel
+          result={result}
+          filename={filename}
+          onMappingAdded={handleValidate}
+        />
+      )}
     </div>
   );
 }
@@ -266,15 +277,17 @@ function inferFsDiv(sheetName: string): "OFS" | "CFS" {
 function ResultPanel({
   result,
   filename,
+  onMappingAdded,
 }: {
   result: SubmitResult;
   filename: string;
+  onMappingAdded: (newDict?: import("@/modules/standards").StandardDictionary) => void;
 }) {
   return (
     <div className="mt-8 space-y-8">
       <FileSummary result={result} filename={filename} />
       <Stage1Extraction result={result} />
-      <Stage2Rules report={result.report} />
+      <Stage2Rules report={result.report} onMappingAdded={onMappingAdded} />
       <Stage3Result report={result.report} />
     </div>
   );
@@ -488,7 +501,7 @@ function SheetPreview({ sheet }: { sheet: FsSummary }) {
   );
 }
 
-function Stage2Rules({ report }: { report: ValidationReport }) {
+function Stage2Rules({ report, onMappingAdded }: { report: ValidationReport; onMappingAdded: (newDict?: import("@/modules/standards").StandardDictionary) => void }) {
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5">
       <StageHeader
@@ -498,7 +511,7 @@ function Stage2Rules({ report }: { report: ValidationReport }) {
       />
       <div className="space-y-4">
         {report.ruleResults.map((r) => (
-          <RuleCard key={r.rule_id} ruleResult={r} />
+          <RuleCard key={r.rule_id} ruleResult={r} onMappingAdded={onMappingAdded} />
         ))}
       </div>
     </section>
@@ -507,8 +520,10 @@ function Stage2Rules({ report }: { report: ValidationReport }) {
 
 function RuleCard({
   ruleResult,
+  onMappingAdded,
 }: {
   ruleResult: ValidationReport["ruleResults"][number];
+  onMappingAdded: (newDict?: import("@/modules/standards").StandardDictionary) => void;
 }) {
   const statusStyle = {
     pass: "border-emerald-200 bg-emerald-50",
@@ -543,7 +558,7 @@ function RuleCard({
           <p className="mb-1 text-xs font-semibold text-slate-700">
             발견된 이슈 {ruleResult.issues.length}건
           </p>
-          <ul className="space-y-1 text-xs">
+          <ul className="space-y-2 text-xs">
             {ruleResult.issues.map((iss, i) => (
               <li
                 key={i}
@@ -555,12 +570,119 @@ function RuleCard({
                       : "text-slate-600"
                 }
               >
-                • {iss.message}
+                <div>• {iss.message}</div>
+                {iss.action?.type === "register_mapping" && (
+                  <RegisterMappingInline
+                    issue={iss}
+                    onMappingAdded={onMappingAdded}
+                  />
+                )}
               </li>
             ))}
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+function RegisterMappingInline({
+  issue,
+  onMappingAdded,
+}: {
+  issue: ValidationReport["ruleResults"][number]["issues"][number];
+  onMappingAdded: (newDict?: import("@/modules/standards").StandardDictionary) => void;
+}) {
+  const { dict, setDict } = useDictionary();
+  const [open, setOpen] = useState(false);
+  const [selectedCode, setSelectedCode] = useState<string>("");
+  const [query, setQuery] = useState("");
+
+  if (!issue.action || issue.action.type !== "register_mapping") return null;
+  const action = issue.action;
+  const list: ListMaster | undefined = dict.lists.find(
+    (l) => l.key === action.list_key,
+  );
+
+  const filtered = (list?.items ?? []).filter(
+    (it) =>
+      !query ||
+      it.code.toLowerCase().includes(query.toLowerCase()) ||
+      it.label.toLowerCase().includes(query.toLowerCase()),
+  );
+
+  function submit() {
+    if (!selectedCode || !list) return;
+    const newMapping: AccountMapping = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      list_key: action.list_key,
+      external_value: action.external_value,
+      standard_code: selectedCode,
+      status: "pending",
+      source: issue.ref?.sheet ?? "검증화면",
+      created_at: new Date().toISOString(),
+    };
+    const newDict = {
+      ...dict,
+      accountMappings: [...dict.accountMappings, newMapping],
+    };
+    setDict(newDict);
+    setOpen(false);
+    onMappingAdded(newDict);
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="ml-3 mt-1 rounded border border-slate-300 bg-white px-2 py-0.5 text-xs text-slate-700 hover:border-slate-400 hover:bg-slate-50"
+      >
+        + 매핑 등록
+      </button>
+    );
+  }
+
+  return (
+    <div className="ml-3 mt-2 rounded border border-slate-300 bg-white p-2 text-slate-700">
+      <p className="mb-2 text-xs">
+        외부 값 <span className="font-mono font-semibold">"{action.external_value}"</span>{" "}
+        → 표준 코드 선택:
+      </p>
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="코드 또는 라벨 검색..."
+        className="mb-2 w-full rounded border border-slate-300 px-2 py-1 text-xs"
+      />
+      <select
+        value={selectedCode}
+        onChange={(e) => setSelectedCode(e.target.value)}
+        size={Math.min(6, filtered.length || 1)}
+        className="mb-2 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+      >
+        <option value="">— 선택 —</option>
+        {filtered.map((it) => (
+          <option key={it.code} value={it.code}>
+            {it.code} · {it.label}
+          </option>
+        ))}
+      </select>
+      <div className="flex gap-2">
+        <button
+          onClick={submit}
+          disabled={!selectedCode}
+          className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          등록 (미확정)
+        </button>
+        <button
+          onClick={() => setOpen(false)}
+          className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50"
+        >
+          취소
+        </button>
+      </div>
     </div>
   );
 }

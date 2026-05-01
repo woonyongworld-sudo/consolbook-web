@@ -47,9 +47,28 @@ export type ListItem = {
   meta?: Record<string, string>;
 };
 
+// v4: 외부 개별 계정과목을 표준 마스터 코드로 매핑.
+// 사용자가 검증 화면에서 등록 → status="pending"
+// 관리자가 표준 사전에서 검토 → status="confirmed"
+export type AccountMappingStatus = "pending" | "confirmed";
+
+export type AccountMapping = {
+  id: string; // 고유 ID
+  list_key: string; // 어느 마스터로 매핑하는지 (예: "consolidation_coa")
+  external_value: string; // 외부 양식의 개별 계정과목 (예: "(모)현금", "ifrs-full_Assets")
+  standard_code: string; // 매핑 대상 마스터 코드 (예: "1000001")
+  status: AccountMappingStatus;
+  source?: string; // 어디서 추가됐는지 (시트명, 파일명 등)
+  created_at: string;
+  confirmed_at?: string;
+  confirmed_by?: string;
+  note?: string;
+};
+
 export type StandardDictionary = {
   version: string;
   updated_at: string;
   sheets: StandardSheetSpec[];
   lists: ListMaster[]; // v3
+  accountMappings: AccountMapping[]; // v4
 };

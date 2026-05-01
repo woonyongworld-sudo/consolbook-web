@@ -3,8 +3,9 @@ import type { StandardDictionary } from "../domain/types";
 // 디폴트 표준 사전 — 사용자가 편집 페이지에서 수정·추가·제거할 수 있음.
 // 첫 로드 시 또는 "디폴트로 리셋" 시 이 값이 사용됨.
 export const DEFAULT_DICTIONARY: StandardDictionary = {
-  version: "1.1.0",
+  version: "1.2.0",
   updated_at: "2026-05-01T00:00:00Z",
+  accountMappings: [],
   sheets: [
     {
       type: "BS",
