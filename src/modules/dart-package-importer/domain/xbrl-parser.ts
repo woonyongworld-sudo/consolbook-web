@@ -34,13 +34,15 @@ async function findMainDocument(zip: JSZip): Promise<string | null> {
 }
 
 // 패턴: <P>1. 일반사항</P>, <P>2-1. 작성기준</P>, <P>15. 우발부채와 약정사항</P>
-// Korean digits, dot, optional sub-numbering.
+// 핵심 제약:
+// - 1~99의 메인번호 + 옵셔널 하이픈-서브번호(1~3 단계)
+// - 숫자 사이는 하이픈만 허용 (점은 거부 → "2021.01.01." 같은 날짜 차단)
+// - 마지막에 점 + 공백 + 한글 시작 제목
+// Group 1 = number (예: "37-7"), Group 2 = title text
 const SUBSECTION_PATTERN =
-  /<P[^>]*>\s*((?:\d+(?:[-.]\d+)*)\.?\s+[^<]{2,80})\s*<\/P>/g;
+  /<P[^>]*>\s*(\d{1,2}(?:-\d{1,2}){0,3})\.\s*([가-힣][^<]{1,79})<\/P>/g;
 
 function extractNoteSubsections(xml: string): NoteSection[] {
-  // 1. "주석" 섹션 영역을 식별 — 사업보고서 안에서 챕터 제목으로 등장하는 위치 기준.
-  // DART 양식상 보통 "재무제표 주석" 또는 "연결재무제표 주석"이라는 챕터 제목이 나옴.
   const noteAreas = findNoteAreas(xml);
   if (noteAreas.length === 0) return [];
 
@@ -48,17 +50,7 @@ function extractNoteSubsections(xml: string): NoteSection[] {
   const seenTitles = new Map<string, number>();
 
   for (const area of noteAreas) {
-    SUBSECTION_PATTERN.lastIndex = 0;
-    const matches: Array<{ title: string; start: number; matchEnd: number }> =
-      [];
-    let m: RegExpExecArray | null;
-    while ((m = SUBSECTION_PATTERN.exec(area.text)) !== null) {
-      matches.push({
-        title: cleanTitle(m[1]),
-        start: m.index,
-        matchEnd: m.index + m[0].length,
-      });
-    }
+    const matches = collectSubsectionsInArea(area.text);
 
     for (let i = 0; i < matches.length; i++) {
       const cur = matches[i];
@@ -66,16 +58,17 @@ function extractNoteSubsections(xml: string): NoteSection[] {
         i + 1 < matches.length ? matches[i + 1].start : area.text.length;
       const sliceHtml = area.text.slice(cur.matchEnd, nextStart);
       const plain = htmlToPlainText(sliceHtml);
-      if (plain.length < 5) continue; // 너무 짧으면 노이즈
+      if (plain.length < 30) continue; // 본문이 너무 짧으면 헤더만 있는 것으로 간주
 
-      const baseTitle = `${area.label} - ${cur.title}`.slice(0, 100);
+      const fullTitle = `${cur.num}. ${cur.title}`;
+      const baseTitle = `${area.label} - ${fullTitle}`.slice(0, 100);
       const occurrence = (seenTitles.get(baseTitle) ?? 0) + 1;
       seenTitles.set(baseTitle, occurrence);
       const title =
         occurrence === 1 ? baseTitle : `${baseTitle} (#${occurrence})`;
 
       sections.push({
-        concept_id: `dart:${area.kind}:${cur.title}`,
+        concept_id: `dart:${area.kind}:${cur.num}`,
         title,
         html: sliceHtml,
         plain_text: plain,
@@ -86,6 +79,43 @@ function extractNoteSubsections(xml: string): NoteSection[] {
   return sections;
 }
 
+type SubsectionMatch = {
+  num: string; // "37-7"
+  title: string;
+  topNum: number; // 37
+  start: number;
+  matchEnd: number;
+};
+
+function collectSubsectionsInArea(text: string): SubsectionMatch[] {
+  const all: SubsectionMatch[] = [];
+  const re = new RegExp(SUBSECTION_PATTERN.source, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const num = m[1] ?? "";
+    const title = (m[2] ?? "").trim();
+    const topNum = parseInt(num.split("-")[0], 10);
+    if (!num || !title) continue;
+    all.push({
+      num,
+      title,
+      topNum,
+      start: m.index,
+      matchEnd: m.index + m[0].length,
+    });
+  }
+
+  // 노이즈 제거 — 단조 증가 (top-level number) 순서를 깨는 매치는 list item
+  // 예: "37-7" → "1" → 1은 list item일 가능성 (정상이면 38, 39로 증가).
+  let maxTopSeen = 0;
+  const REGRESSION_TOLERANCE = 2;
+  return all.filter((m) => {
+    if (m.topNum < maxTopSeen - REGRESSION_TOLERANCE) return false;
+    if (m.topNum > maxTopSeen) maxTopSeen = m.topNum;
+    return true;
+  });
+}
+
 type NoteArea = {
   text: string;
   kind: "separate" | "consolidated" | "unknown";
@@ -93,50 +123,36 @@ type NoteArea = {
 };
 
 function findNoteAreas(xml: string): NoteArea[] {
-  const areas: NoteArea[] = [];
-
-  // 챕터 마커: <SECTION-1 ATOC="Y" AASSOCNOTE="...">...
-  // 또는 본문 안의 챕터 제목에 "재무제표 주석" / "연결재무제표 주석"
-  const titleMatches: Array<{ idx: number; isCfs: boolean }> = [];
-  const re = /<TITLE[^>]*>\s*([^<]*주석[^<]*)\s*<\/TITLE>/g;
+  // 모든 TITLE 태그 위치를 모은 뒤, 주석 챕터 TITLE의 영역을 "다음 어떤 TITLE이든"
+  // 까지로 자른다. 이렇게 해야 "3. 연결재무제표 주석" 챕터가 그 다음 챕터
+  // ("4. 재무제표")의 내용을 침범하지 않는다.
+  const allTitles: Array<{ idx: number; text: string; afterIdx: number }> = [];
+  const re = /<TITLE[^>]*>\s*([^<]+?)\s*<\/TITLE>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml)) !== null) {
-    const titleText = m[1];
-    const isCfs = /연결/.test(titleText);
-    titleMatches.push({ idx: m.index, isCfs });
+    allTitles.push({ idx: m.index, text: m[1], afterIdx: m.index + m[0].length });
   }
 
-  // Fallback: <P> 헤딩 패턴 — 챕터 분리가 일정하지 않은 회사 대비
-  if (titleMatches.length === 0) {
-    const fallback =
-      /<P[^>]*>\s*((?:연결\s*)?재무제표\s*주석[^<]*)\s*<\/P>/g;
-    while ((m = fallback.exec(xml)) !== null) {
-      const isCfs = /연결/.test(m[1]);
-      titleMatches.push({ idx: m.index, isCfs });
-    }
-  }
-
-  if (titleMatches.length === 0) return [];
-
-  for (let i = 0; i < titleMatches.length; i++) {
-    const cur = titleMatches[i];
-    const nextIdx =
-      i + 1 < titleMatches.length ? titleMatches[i + 1].idx : xml.length;
-    const slice = xml.slice(cur.idx, nextIdx);
+  const areas: NoteArea[] = [];
+  for (let i = 0; i < allTitles.length; i++) {
+    const t = allTitles[i];
+    if (!isNotesChapterTitle(t.text)) continue;
+    const nextIdx = i + 1 < allTitles.length ? allTitles[i + 1].idx : xml.length;
+    const slice = xml.slice(t.afterIdx, nextIdx);
+    const isCfs = /연결/.test(t.text);
     areas.push({
       text: slice,
-      kind: cur.isCfs ? "consolidated" : "separate",
-      label: cur.isCfs ? "연결주석" : "별도주석",
+      kind: isCfs ? "consolidated" : "separate",
+      label: isCfs ? "연결주석" : "별도주석",
     });
   }
   return areas;
 }
 
-function cleanTitle(t: string): string {
-  return t
-    .replace(/\s+/g, " ")
-    .replace(/^(\d+(?:[-.]\d+)*)\.?\s+/, "$1. ")
-    .trim();
+function isNotesChapterTitle(text: string): boolean {
+  // "3. 연결재무제표 주석", "5. 재무제표 주석", "재무제표 주석" 등을 인식
+  // "주석" 단어를 포함하면서 "재무제표"도 함께 등장하는 챕터 제목만.
+  return /주석/.test(text) && /재무제표/.test(text);
 }
 
 export function htmlToPlainText(html: string): string {

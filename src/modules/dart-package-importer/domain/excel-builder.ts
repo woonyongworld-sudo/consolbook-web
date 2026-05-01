@@ -7,6 +7,7 @@ import type {
   SjDiv,
 } from "./types";
 import { FS_DIV_LABELS, REPRT_CODE_LABELS, SJ_DIV_LABELS } from "./types";
+import { renderNoteHtmlToSheet } from "./note-renderer";
 
 export type PackageMeta = {
   corp_name: string;
@@ -146,13 +147,28 @@ function addNoteSheets(
     idx.addRow({ no: i + 1, sheet: sheetName, title: note.title });
 
     const ws = wb.addWorksheet(sheetName);
-    ws.columns = [{ header: note.title, key: "content", width: 100 }];
-    styleHeader(ws.getRow(1));
-    const lines = note.plain_text.split(/\n/);
-    for (const line of lines) {
-      ws.addRow({ content: line });
+    // 첫 행: 주석 제목 (병합으로 넓게)
+    const titleCell = ws.getCell(1, 1);
+    titleCell.value = note.title;
+    titleCell.font = { bold: true, size: 12 };
+    titleCell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFE2E8F0" },
+    };
+    titleCell.alignment = { vertical: "middle" };
+
+    // 본문 시작 (2행부터). HTML을 파싱해 P/TABLE 셀 단위로 렌더.
+    const result = renderNoteHtmlToSheet(ws, note.title, note.html, 2);
+    // 제목 행을 본문 폭만큼 병합
+    if (result.maxCol > 1) {
+      ws.mergeCells(1, 1, 1, result.maxCol);
     }
-    ws.getColumn("content").alignment = { wrapText: true, vertical: "top" };
+    // 컬럼 기본 너비 — 표 갯수가 많으면 셀 안에서 wrap
+    const defaultWidth = result.maxCol <= 2 ? 60 : 22;
+    for (let c = 1; c <= result.maxCol; c++) {
+      ws.getColumn(c).width = defaultWidth;
+    }
   });
 }
 
