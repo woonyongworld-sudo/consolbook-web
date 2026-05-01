@@ -1,4 +1,12 @@
-import type { Issue, NormalizedRow, Rule, ValidationContext } from "./types";
+import type {
+  Issue,
+  NormalizedRow,
+  Rule,
+  RuleResult,
+  RuleTrace,
+  TraceInput,
+  ValidationContext,
+} from "./types";
 
 const TOLERANCE = 1; // 원 단위 — 반올림 차이 흡수
 
@@ -11,7 +19,7 @@ export const RULES: Rule[] = [
     id: "BS_BALANCE_THSTRM",
     name: "BS 차대일치 (당기)",
     description:
-      "재무상태표에서 자산총계 = 부채총계 + 자본총계 (당기금액)을 검증.",
+      "재무상태표에서 자산총계 = 부채총계 + 자본총계 (당기금액)을 검증합니다.",
     severity: "error",
     scope: "fs",
     check: (ctx) => bsBalanceCheck(ctx, "thstrm_amount", "당기"),
@@ -20,27 +28,25 @@ export const RULES: Rule[] = [
     id: "BS_BALANCE_FRMTRM",
     name: "BS 차대일치 (전기)",
     description:
-      "재무상태표에서 자산총계 = 부채총계 + 자본총계 (전기금액)을 검증.",
+      "재무상태표에서 자산총계 = 부채총계 + 자본총계 (전기금액)을 검증합니다. 전기 데이터가 없을 수 있으므로 severity는 warning.",
     severity: "warning",
     scope: "fs",
     check: (ctx) => bsBalanceCheck(ctx, "frmtrm_amount", "전기"),
   },
   {
     id: "OFS_CFS_EQUITY_REASONABLE",
-    name: "별도-연결 자본 정합성 (informative)",
+    name: "별도-연결 자본 정합성",
     description:
-      "별도재무제표와 연결재무제표의 자본총계가 비합리적 차이를 보이는지 점검. 연결자본은 보통 별도자본보다 크거나 비슷.",
+      "별도 자본총계와 연결 자본총계의 비율이 합리적인지 점검합니다. 일반적으로 연결자본은 별도자본 이상이어야 하며, 5배를 초과하면 입력 오류일 가능성이 있습니다.",
     severity: "warning",
     scope: "cross_sheet",
-    check: (ctx) => ofsCfsEquityCheck(ctx),
+    check: ofsCfsEquityCheck,
   },
 ];
 
 type AmountField = "thstrm_amount" | "frmtrm_amount" | "bfefrmtrm_amount";
 
 function normalizeKor(s: string): string {
-  // 한국 재무제표는 "자    산    총    계"처럼 공백으로 강조하기도 함.
-  // 모든 공백·전각공백 제거 후 비교.
   return s.replace(/[\s　]+/g, "");
 }
 
@@ -60,10 +66,21 @@ function bsBalanceCheck(
   ctx: ValidationContext,
   field: AmountField,
   label: string,
-): Issue[] {
+): RuleResult {
   const issues: Issue[] = [];
+  const traces: RuleTrace[] = [];
   const bsSheets = ctx.fs.filter((s) => s.sj_div === "BS");
-  if (bsSheets.length === 0) return [];
+
+  if (bsSheets.length === 0) {
+    traces.push({
+      formula: "자산총계 = 부채총계 + 자본총계",
+      scope_label: `재무상태표 (${label})`,
+      inputs: [],
+      computation: "재무상태표 시트가 없어 검증할 수 없습니다.",
+      status: "missing",
+    });
+    return { issues, traces };
+  }
 
   for (const bs of bsSheets) {
     const fsLabel = bs.fs_div === "OFS" ? "별도" : "연결";
@@ -71,57 +88,133 @@ function bsBalanceCheck(
     const liab = findRowByKeywords(bs.rows, LIAB_TOTAL_KEYWORDS);
     const equity = findRowByKeywords(bs.rows, EQUITY_TOTAL_KEYWORDS);
 
-    if (!asset || !liab || !equity) {
+    const a = asset?.[field] ?? null;
+    const l = liab?.[field] ?? null;
+    const e = equity?.[field] ?? null;
+
+    const inputs: TraceInput[] = [
+      buildInput("자산총계", asset, field),
+      buildInput("부채총계", liab, field),
+      buildInput("자본총계", equity, field),
+    ];
+
+    if (a == null || l == null || e == null) {
+      const missingNames: string[] = [];
+      if (!asset || a == null) missingNames.push("자산총계");
+      if (!liab || l == null) missingNames.push("부채총계");
+      if (!equity || e == null) missingNames.push("자본총계");
+      traces.push({
+        formula: "자산총계 = 부채총계 + 자본총계",
+        scope_label: `${fsLabel} BS · ${label}`,
+        inputs,
+        computation: `필요 데이터 누락: ${missingNames.join(", ")} (검증 스킵)`,
+        status: "missing",
+      });
       issues.push({
         rule_id: "BS_BALANCE_" + field,
         severity: "warning",
-        message: `${fsLabel} BS에서 자산총계/부채총계/자본총계 행을 모두 찾지 못함 (검증 스킵).`,
+        message: `${fsLabel} BS에서 ${missingNames.join(", ")} 행을 찾지 못했거나 ${label} 금액이 비어있습니다.`,
         ref: { sheet: bs.sheetName },
       });
       continue;
     }
 
-    const a = asset[field] ?? null;
-    const l = liab[field] ?? null;
-    const e = equity[field] ?? null;
-    if (a == null || l == null || e == null) continue;
+    const sum = l + e;
+    const diff = a - sum;
+    const isMatch = Math.abs(diff) <= TOLERANCE;
 
-    const diff = a - (l + e);
-    if (Math.abs(diff) > TOLERANCE) {
+    traces.push({
+      formula: "자산총계 = 부채총계 + 자본총계",
+      scope_label: `${fsLabel} BS · ${label}`,
+      inputs,
+      computation: `${fmt(a)} ${isMatch ? "=" : "≠"} ${fmt(l)} + ${fmt(e)} (= ${fmt(sum)}) ${isMatch ? "✓" : "차이 " + fmt(diff)}`,
+      status: isMatch ? "match" : "mismatch",
+      diff: isMatch ? 0 : diff,
+    });
+
+    if (!isMatch) {
       issues.push({
         rule_id: "BS_BALANCE",
         severity: "error",
-        message: `${fsLabel} BS ${label}: 자산총계 ${fmt(a)} ≠ 부채총계+자본총계 ${fmt(l + e)} (차이 ${fmt(diff)})`,
+        message: `${fsLabel} BS ${label}: 자산총계 ${fmt(a)} ≠ 부채총계+자본총계 ${fmt(sum)} (차이 ${fmt(diff)})`,
         ref: {
           sheet: bs.sheetName,
-          row: asset.rowIndex,
-          account_nm: asset.account_nm,
+          row: asset!.rowIndex,
+          account_nm: asset!.account_nm,
         },
-        expected: l + e,
+        expected: sum,
         actual: a,
         diff,
       });
     }
   }
-  return issues;
+  return { issues, traces };
 }
 
-function ofsCfsEquityCheck(ctx: ValidationContext): Issue[] {
+function ofsCfsEquityCheck(ctx: ValidationContext): RuleResult {
   const issues: Issue[] = [];
+  const traces: RuleTrace[] = [];
   const ofsBS = ctx.fs.find((s) => s.sj_div === "BS" && s.fs_div === "OFS");
   const cfsBS = ctx.fs.find((s) => s.sj_div === "BS" && s.fs_div === "CFS");
-  if (!ofsBS || !cfsBS) return [];
+
+  if (!ofsBS || !cfsBS) {
+    traces.push({
+      formula: "0.5 ≤ (연결 자본총계 / 별도 자본총계) ≤ 5",
+      scope_label: "별도 BS ↔ 연결 BS",
+      inputs: [],
+      computation: !ofsBS
+        ? "별도 BS가 없습니다."
+        : "연결 BS가 없습니다.",
+      status: "missing",
+    });
+    return { issues, traces };
+  }
 
   const ofsEq = findRowByKeywords(ofsBS.rows, EQUITY_TOTAL_KEYWORDS);
   const cfsEq = findRowByKeywords(cfsBS.rows, EQUITY_TOTAL_KEYWORDS);
-  if (!ofsEq?.thstrm_amount || !cfsEq?.thstrm_amount) return [];
+  const ofs = ofsEq?.thstrm_amount ?? null;
+  const cfs = cfsEq?.thstrm_amount ?? null;
 
-  const ofs = ofsEq.thstrm_amount;
-  const cfs = cfsEq.thstrm_amount;
-  if (ofs <= 0) return [];
+  const inputs: TraceInput[] = [
+    buildInput("별도 자본총계", ofsEq, "thstrm_amount"),
+    buildInput("연결 자본총계", cfsEq, "thstrm_amount"),
+  ];
 
-  // 연결자본이 별도자본의 50% 미만이면 비정상으로 간주 (대부분 자회사 비지배지분 가산)
+  if (ofs == null || cfs == null) {
+    traces.push({
+      formula: "0.5 ≤ (연결 자본총계 / 별도 자본총계) ≤ 5",
+      scope_label: "별도 BS ↔ 연결 BS",
+      inputs,
+      computation: "자본총계 행을 한쪽 또는 양쪽에서 찾지 못해 비교할 수 없습니다.",
+      status: "missing",
+    });
+    return { issues, traces };
+  }
+
+  if (ofs <= 0) {
+    traces.push({
+      formula: "0.5 ≤ (연결 자본총계 / 별도 자본총계) ≤ 5",
+      scope_label: "별도 BS ↔ 연결 BS",
+      inputs,
+      computation: `별도 자본총계가 0 이하 (${fmt(ofs)}) — 비율 계산 불가, 검증 스킵.`,
+      status: "missing",
+    });
+    return { issues, traces };
+  }
+
   const ratio = cfs / ofs;
+  const isOk = ratio >= 0.5 && ratio <= 5;
+  const computation = `연결 ${fmt(cfs)} / 별도 ${fmt(ofs)} = ${ratio.toFixed(2)}배 ${isOk ? "(범위 0.5~5 안 ✓)" : "(범위 벗어남)"}`;
+
+  traces.push({
+    formula: "0.5 ≤ (연결 자본총계 / 별도 자본총계) ≤ 5",
+    scope_label: "별도 BS ↔ 연결 BS · 당기",
+    inputs,
+    computation,
+    status: isOk ? "match" : "mismatch",
+    diff: cfs - ofs,
+  });
+
   if (ratio < 0.5) {
     issues.push({
       rule_id: "OFS_CFS_EQUITY",
@@ -132,10 +225,7 @@ function ofsCfsEquityCheck(ctx: ValidationContext): Issue[] {
       actual: cfs,
       diff: cfs - ofs,
     });
-  }
-
-  // 연결자본이 별도자본의 5배 이상이면 의심
-  if (ratio > 5) {
+  } else if (ratio > 5) {
     issues.push({
       rule_id: "OFS_CFS_EQUITY",
       severity: "warning",
@@ -147,7 +237,26 @@ function ofsCfsEquityCheck(ctx: ValidationContext): Issue[] {
     });
   }
 
-  return issues;
+  return { issues, traces };
+}
+
+function buildInput(
+  label: string,
+  row: NormalizedRow | null,
+  field: AmountField,
+): TraceInput {
+  if (!row) {
+    return { label, value: null };
+  }
+  return {
+    label,
+    value: row[field] ?? null,
+    ref: {
+      row: row.rowIndex,
+      account_nm: row.account_nm,
+      account_id: row.account_id,
+    },
+  };
 }
 
 function fmt(n: number): string {

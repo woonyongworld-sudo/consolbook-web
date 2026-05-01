@@ -48,22 +48,46 @@ export type NormalizedRow = {
   rowIndex: number; // 1-based row in sheet
 };
 
+// 룰이 무엇을 어떻게 검증했는지의 자취. 통과/실패와 무관하게 항상 생성되어
+// 사용자가 "어떤 데이터를 어떻게 검사했는지" 직접 볼 수 있게 함.
+export type RuleTrace = {
+  formula: string; // 사람이 읽을 수 있는 룰 공식 (예: "자산총계 = 부채총계 + 자본총계")
+  scope_label: string; // 적용 범위 (예: "별도 BS · 당기금액")
+  inputs: TraceInput[]; // 룰이 본 입력 데이터
+  computation: string; // 실제 연산 표현 (예: "12,345 = 5,678 + 6,667 (차이 0)")
+  status: "match" | "mismatch" | "missing"; // 매치/불일치/데이터 부족
+  diff?: number;
+};
+
+export type TraceInput = {
+  label: string; // 데이터 항목명 (예: "자산총계")
+  value: number | string | null;
+  ref?: SourceRef; // 출처 (시트/행)
+};
+
+export type RuleResult = {
+  issues: Issue[]; // 발견된 문제 (없으면 빈 배열)
+  traces: RuleTrace[]; // 검증 자취 (룰이 실제로 본 데이터·연산)
+};
+
 export type Rule = {
   id: string;
   name: string;
   description: string;
   severity: Severity;
   scope: "fs" | "cross_sheet";
-  check: (ctx: ValidationContext) => Issue[];
+  check: (ctx: ValidationContext) => RuleResult;
 };
 
 export type ValidationReport = {
   ruleResults: Array<{
     rule_id: string;
     rule_name: string;
+    rule_description: string;
     severity: Severity;
     status: "pass" | "fail" | "warn" | "skip";
     issues: Issue[];
+    traces: RuleTrace[];
   }>;
   summary: {
     total_rules: number;

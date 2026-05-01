@@ -24,12 +24,6 @@ function SiteHeader() {
         </Link>
         <nav className="flex items-center gap-2 text-sm text-slate-600 sm:gap-5">
           <Link
-            href="/demo"
-            className="hidden hover:text-slate-900 sm:inline"
-          >
-            정산표 합산
-          </Link>
-          <Link
             href="/dart-importer"
             className="hidden hover:text-slate-900 sm:inline"
           >
@@ -39,7 +33,13 @@ function SiteHeader() {
             href="/validation"
             className="hidden hover:text-slate-900 sm:inline"
           >
-            패키지 검증
+            패키지 입력/검증
+          </Link>
+          <Link
+            href="/demo"
+            className="hidden hover:text-slate-900 sm:inline"
+          >
+            정산표 작성
           </Link>
           <a
             href="#modules"
@@ -121,25 +121,25 @@ function ModulesSection() {
           />
           <ModuleCard
             badge="02"
+            badgeColor="bg-amber-50 text-amber-700"
+            title="연결패키지 입력/검증"
+            tagline="시트별 데이터 추출 + 정합성 점검"
+            description=".xlsx 파일을 업로드하면 어떤 시트에서 어떤 데이터가 추출되는지, 어떤 룰로 검증하는지 단계별로 표시합니다. BS 차대일치, 자본 정합성 등 시트 간 검증 결과를 한국어로 풀이."
+            href="/validation"
+            cta="파일 업로드 →"
+            samples={["추출 미리보기", "룰 풀이", "계산 과정 노출"]}
+          />
+          <ModuleCard
+            badge="03"
             badgeColor="bg-emerald-50 text-emerald-700"
-            title="연결정산표 합산"
-            tagline="별도 → 연결 자동 계산"
-            description="별도재무제표 CSV를 업로드하면 표준계정과목 기준으로 자동 합산하고, 연결조정·내부거래 제거를 거쳐 연결정산표를 생성합니다. 결과는 CSV로 다운로드 가능."
+            title="연결정산표 작성"
+            tagline="별도 → 연결 자동 합산"
+            description="별도재무제표 CSV를 업로드하면 표준계정과목 기준으로 자동 합산하고, 연결조정·내부거래 제거를 거쳐 연결정산표를 생성합니다. 합산 규칙도 화면에서 직접 확인 가능."
             href="/demo"
             cta="합산 시작 →"
             samples={["샘플 4개 내장", "CSV 직접 업로드"]}
             secondaryHref="/demo?sample=1"
             secondaryCta="샘플 즉시 체험"
-          />
-          <ModuleCard
-            badge="03"
-            badgeColor="bg-amber-50 text-amber-700"
-            title="연결패키지 검증"
-            tagline="정합성 자동 점검"
-            description=".xlsx 파일을 업로드하면 BS 차대일치, 별도-연결 자본 정합성 등 시트 간 정합성을 자동 점검합니다. 오류 발견 시 어느 시트·행에서 발생했는지까지 표시."
-            href="/validation"
-            cta="파일 업로드 →"
-            samples={["BS 차대일치", "자본 정합성", "+ 룰 추가 가능"]}
           />
         </div>
       </div>

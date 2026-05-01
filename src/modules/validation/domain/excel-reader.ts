@@ -6,30 +6,84 @@ import type { NormalizedRow, ValidationContext } from "./types";
 //   별도_재무상태표 / 연결_재무상태표 / 별도_손익계산서 / ... / 별도_자본변동표 ...
 // 그 외 시트(요약, 주석_*)는 무시.
 
-const SJ_PATTERNS: Array<{
+// 시트명 규약 — 사용자가 검증 페이지에서 직접 볼 수 있도록 export.
+export const SJ_PATTERNS: Array<{
   fs_div: "OFS" | "CFS";
   sj_div: "BS" | "IS" | "CIS" | "CF" | "SCE";
+  expectedName: string;
   match: (name: string) => boolean;
 }> = [
-  { fs_div: "OFS", sj_div: "BS", match: (n) => n === "별도_재무상태표" },
-  { fs_div: "CFS", sj_div: "BS", match: (n) => n === "연결_재무상태표" },
-  { fs_div: "OFS", sj_div: "IS", match: (n) => n === "별도_손익계산서" },
-  { fs_div: "CFS", sj_div: "IS", match: (n) => n === "연결_손익계산서" },
+  {
+    fs_div: "OFS",
+    sj_div: "BS",
+    expectedName: "별도_재무상태표",
+    match: (n) => n === "별도_재무상태표",
+  },
+  {
+    fs_div: "CFS",
+    sj_div: "BS",
+    expectedName: "연결_재무상태표",
+    match: (n) => n === "연결_재무상태표",
+  },
+  {
+    fs_div: "OFS",
+    sj_div: "IS",
+    expectedName: "별도_손익계산서",
+    match: (n) => n === "별도_손익계산서",
+  },
+  {
+    fs_div: "CFS",
+    sj_div: "IS",
+    expectedName: "연결_손익계산서",
+    match: (n) => n === "연결_손익계산서",
+  },
   {
     fs_div: "OFS",
     sj_div: "CIS",
+    expectedName: "별도_포괄손익계산서",
     match: (n) => n === "별도_포괄손익계산서",
   },
   {
     fs_div: "CFS",
     sj_div: "CIS",
+    expectedName: "연결_포괄손익계산서",
     match: (n) => n === "연결_포괄손익계산서",
   },
-  { fs_div: "OFS", sj_div: "CF", match: (n) => n === "별도_현금흐름표" },
-  { fs_div: "CFS", sj_div: "CF", match: (n) => n === "연결_현금흐름표" },
-  { fs_div: "OFS", sj_div: "SCE", match: (n) => n === "별도_자본변동표" },
-  { fs_div: "CFS", sj_div: "SCE", match: (n) => n === "연결_자본변동표" },
+  {
+    fs_div: "OFS",
+    sj_div: "CF",
+    expectedName: "별도_현금흐름표",
+    match: (n) => n === "별도_현금흐름표",
+  },
+  {
+    fs_div: "CFS",
+    sj_div: "CF",
+    expectedName: "연결_현금흐름표",
+    match: (n) => n === "연결_현금흐름표",
+  },
+  {
+    fs_div: "OFS",
+    sj_div: "SCE",
+    expectedName: "별도_자본변동표",
+    match: (n) => n === "별도_자본변동표",
+  },
+  {
+    fs_div: "CFS",
+    sj_div: "SCE",
+    expectedName: "연결_자본변동표",
+    match: (n) => n === "연결_자본변동표",
+  },
 ];
+
+// 컬럼 매핑 정의 — 검증 페이지의 "데이터 추출 단계"에서 사용자에게 노출.
+export const COLUMN_MAPPING = [
+  { col: 1, field: "account_id", label: "표준계정과목코드", required: true },
+  { col: 2, field: "account_nm", label: "계정과목명", required: true },
+  { col: 3, field: "thstrm_amount", label: "당기금액", required: true },
+  { col: 4, field: "frmtrm_amount", label: "전기금액", required: false },
+  { col: 5, field: "bfefrmtrm_amount", label: "전전기금액", required: false },
+  { col: 6, field: "currency", label: "통화", required: false },
+] as const;
 
 export async function readPackageXlsx(
   buf: ArrayBuffer,

@@ -1,16 +1,44 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { ValidationReport } from "../domain/types";
+import type { ValidationReport, RuleTrace, TraceInput } from "../domain/types";
+
+type FsSummary = {
+  fs_div: "OFS" | "CFS";
+  sj_div: string;
+  sheetName: string;
+  rowCount: number;
+  preview: Array<{
+    rowIndex: number;
+    account_id: string;
+    account_nm: string;
+    thstrm_amount: number | null;
+    frmtrm_amount: number | null;
+  }>;
+};
+
+type ExtractionMeta = {
+  expectedSheets: Array<{ fs_div: string; sj_div: string; expectedName: string }>;
+  columnMapping: ReadonlyArray<{
+    col: number;
+    field: string;
+    label: string;
+    required: boolean;
+  }>;
+};
 
 type SubmitResult = {
   report: ValidationReport;
-  fs_summary: Array<{
-    fs_div: "OFS" | "CFS";
-    sj_div: string;
-    sheetName: string;
-    rowCount: number;
-  }>;
+  fs_summary: FsSummary[];
+  extraction_meta: ExtractionMeta;
+};
+
+const SJ_LABEL: Record<string, string> = {
+  BS: "재무상태표",
+  IS: "손익계산서",
+  CIS: "포괄손익계산서",
+  CF: "현금흐름표",
+  SCE: "자본변동표",
 };
 
 export default function ValidationWorkspace() {
@@ -53,24 +81,18 @@ export default function ValidationWorkspace() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
-      <h1 className="text-2xl font-bold text-slate-900">연결패키지 검증</h1>
+      <h1 className="text-2xl font-bold text-slate-900">
+        연결패키지 입력/검증
+      </h1>
       <p className="mt-2 text-sm text-slate-600">
-        dart-package-importer가 만든 .xlsx 파일을 업로드하면 시트 간 정합성을
-        점검합니다. 현재 활성 룰은 다음과 같습니다:
+        .xlsx 파일을 업로드하면 (1) 어떤 시트의 어떤 데이터를 추출했는지, (2)
+        어떤 룰로 어떻게 검증했는지, (3) 최종 결과를 단계별로 표시합니다.
       </p>
-      <ul className="mt-3 ml-5 list-disc space-y-1 text-sm text-slate-700">
-        <li>
-          <strong>BS 차대일치</strong> — 자산총계 = 부채총계 + 자본총계 (당기·전기)
-        </li>
-        <li>
-          <strong>별도-연결 자본 정합성</strong> — 연결자본이 별도자본의 일정 비율 안에 있는지
-        </li>
-      </ul>
 
       <label
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
-        className="mt-8 block cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white p-12 text-center hover:border-slate-400 hover:bg-slate-50"
+        className="mt-6 block cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white p-10 text-center hover:border-slate-400 hover:bg-slate-50"
       >
         <input
           ref={inputRef}
@@ -86,12 +108,12 @@ export default function ValidationWorkspace() {
           .xlsx 파일을 끌어다 놓거나 클릭해 선택
         </p>
         <p className="mt-1 text-xs text-slate-500">
-          dart-package-importer로 만든 파일을 권장
+          DART 패키지 임포터로 만든 파일 권장
         </p>
       </label>
 
       {submitting && (
-        <p className="mt-4 text-sm text-slate-500">검증 중…</p>
+        <p className="mt-4 text-sm text-slate-500">분석 중…</p>
       )}
 
       {error && (
@@ -100,9 +122,7 @@ export default function ValidationWorkspace() {
         </div>
       )}
 
-      {result && (
-        <ResultPanel result={result} filename={filename} />
-      )}
+      {result && <ResultPanel result={result} filename={filename} />}
     </div>
   );
 }
@@ -114,92 +134,417 @@ function ResultPanel({
   result: SubmitResult;
   filename: string;
 }) {
-  const { summary, ruleResults, meta } = result.report;
-  const hasFails = summary.failed > 0;
   return (
-    <div className="mt-8 space-y-6">
-      <div className="rounded-2xl border border-slate-200 bg-white p-5">
-        <h2 className="text-lg font-semibold text-slate-900">
-          검증 결과 — {filename}
-        </h2>
-        <div className="mt-2 text-sm text-slate-600">
-          {meta.corp_name && <span>{meta.corp_name} · </span>}
-          {meta.bsns_year && <span>{meta.bsns_year}년 · </span>}
-          {meta.reprt_code && <span>{meta.reprt_code}</span>}
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2 text-sm">
-          <Pill color="emerald">통과 {summary.passed}</Pill>
-          <Pill color="rose">실패 {summary.failed}</Pill>
-          <Pill color="amber">경고 {summary.warnings}</Pill>
-          <Pill color="slate">스킵 {summary.skipped}</Pill>
-          <Pill color="slate">총 {summary.total_rules}</Pill>
-        </div>
-        <p
-          className={`mt-4 text-sm font-semibold ${
-            hasFails ? "text-rose-700" : "text-emerald-700"
-          }`}
-        >
-          {hasFails ? "⚠ 정합성 오류가 발견되었습니다." : "✓ 모든 필수 룰 통과"}
-        </p>
-      </div>
+    <div className="mt-8 space-y-8">
+      <FileSummary result={result} filename={filename} />
+      <Stage1Extraction result={result} />
+      <Stage2Rules report={result.report} />
+      <Stage3Result report={result.report} />
+    </div>
+  );
+}
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-5">
-        <h3 className="mb-3 text-sm font-semibold text-slate-900">룰별 결과</h3>
-        <ul className="divide-y divide-slate-100">
-          {ruleResults.map((r) => (
-            <li key={r.rule_id} className="py-3">
-              <div className="flex items-center gap-2">
-                <StatusBadge status={r.status} />
-                <span className="font-medium text-slate-900">{r.rule_name}</span>
-                <span className="ml-auto font-mono text-xs text-slate-400">
-                  {r.rule_id}
-                </span>
-              </div>
-              {r.issues.length > 0 && (
-                <ul className="mt-2 ml-2 space-y-1">
-                  {r.issues.map((iss, i) => (
-                    <li
-                      key={i}
-                      className={`text-xs ${
-                        iss.severity === "error"
-                          ? "text-rose-700"
-                          : iss.severity === "warning"
-                            ? "text-amber-700"
-                            : "text-slate-600"
-                      }`}
-                    >
-                      • {iss.message}
-                      {iss.ref?.sheet && (
-                        <span className="ml-2 font-mono text-slate-400">
-                          [{iss.ref.sheet}
-                          {iss.ref.row ? `:${iss.ref.row}` : ""}]
+function FileSummary({
+  result,
+  filename,
+}: {
+  result: SubmitResult;
+  filename: string;
+}) {
+  const { meta } = result.report;
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5">
+      <h2 className="text-lg font-semibold text-slate-900">{filename}</h2>
+      <div className="mt-1 text-sm text-slate-600">
+        {meta.corp_name && <span>{meta.corp_name}</span>}
+        {meta.bsns_year && <span> · {meta.bsns_year}년</span>}
+        {meta.reprt_code && <span> · {meta.reprt_code}</span>}
+      </div>
+    </div>
+  );
+}
+
+function Stage1Extraction({ result }: { result: SubmitResult }) {
+  const { extraction_meta, fs_summary } = result;
+  const recognizedNames = new Set(fs_summary.map((s) => s.sheetName));
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <StageHeader
+        no={1}
+        title="데이터 추출 단계"
+        subtitle="업로드한 .xlsx에서 어떤 시트를 어떤 규칙으로 읽었는지"
+      />
+
+      {/* 시트 인식 결과 */}
+      <div className="mb-5">
+        <h3 className="mb-2 text-sm font-semibold text-slate-700">
+          기대 시트와 실제 인식
+        </h3>
+        <p className="mb-2 text-xs text-slate-500">
+          시트 이름이 정확히 일치할 때만 인식됩니다. 누락된 시트는 검증에서
+          제외됩니다.
+        </p>
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-xs">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                <th className="px-3 py-2 text-left">구분</th>
+                <th className="px-3 py-2 text-left">제표</th>
+                <th className="px-3 py-2 text-left">기대 시트명</th>
+                <th className="px-3 py-2 text-center">상태</th>
+                <th className="px-3 py-2 text-right">행 수</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {extraction_meta.expectedSheets.map((es) => {
+                const found = fs_summary.find(
+                  (f) => f.sheetName === es.expectedName,
+                );
+                const ok = recognizedNames.has(es.expectedName);
+                return (
+                  <tr key={es.expectedName}>
+                    <td className="px-3 py-2 text-slate-600">
+                      {es.fs_div === "OFS" ? "별도" : "연결"}
+                    </td>
+                    <td className="px-3 py-2 text-slate-600">
+                      {SJ_LABEL[es.sj_div] || es.sj_div}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-slate-900">
+                      {es.expectedName}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {ok ? (
+                        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">
+                          ✓ 인식
+                        </span>
+                      ) : (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">
+                          – 없음
                         </span>
                       )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ul>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-700">
+                      {found ? found.rowCount : "-"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-5">
-        <h3 className="mb-3 text-sm font-semibold text-slate-900">
-          인식된 재무제표 시트
+      {/* 컬럼 매핑 규칙 */}
+      <div className="mb-5">
+        <h3 className="mb-2 text-sm font-semibold text-slate-700">
+          컬럼 매핑 규칙
         </h3>
-        <ul className="space-y-1 text-sm text-slate-700">
-          {result.fs_summary.map((s, i) => (
-            <li key={i}>
-              {s.fs_div === "OFS" ? "별도" : "연결"} · {s.sj_div} ·{" "}
-              <span className="font-mono text-xs text-slate-500">
-                {s.sheetName}
-              </span>{" "}
-              ({s.rowCount}행)
-            </li>
-          ))}
-        </ul>
+        <p className="mb-2 text-xs text-slate-500">
+          각 FS 시트에서 셀 위치(컬럼) 기준으로 다음 필드를 읽습니다.
+        </p>
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-xs">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                <th className="px-3 py-2 text-left">셀 컬럼</th>
+                <th className="px-3 py-2 text-left">필드</th>
+                <th className="px-3 py-2 text-left">의미</th>
+                <th className="px-3 py-2 text-center">필수</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {extraction_meta.columnMapping.map((c) => (
+                <tr key={c.field}>
+                  <td className="px-3 py-2 font-mono text-slate-900">
+                    {String.fromCharCode(64 + c.col)} ({c.col}열)
+                  </td>
+                  <td className="px-3 py-2 font-mono text-slate-700">{c.field}</td>
+                  <td className="px-3 py-2 text-slate-700">{c.label}</td>
+                  <td className="px-3 py-2 text-center">
+                    {c.required ? (
+                      <span className="text-rose-600">필수</span>
+                    ) : (
+                      <span className="text-slate-400">선택</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {/* 시트별 정규화된 데이터 미리보기 */}
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-slate-700">
+          정규화된 데이터 미리보기 (각 시트 첫 8행)
+        </h3>
+        <p className="mb-2 text-xs text-slate-500">
+          위 매핑 규칙으로 셀에서 읽어 표준 형태로 정리한 결과입니다.
+        </p>
+        <div className="space-y-3">
+          {fs_summary.map((s) => (
+            <SheetPreview key={s.sheetName} sheet={s} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SheetPreview({ sheet }: { sheet: FsSummary }) {
+  return (
+    <details className="rounded-lg border border-slate-200 bg-slate-50">
+      <summary className="cursor-pointer px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+        {sheet.fs_div === "OFS" ? "별도" : "연결"} ·{" "}
+        {SJ_LABEL[sheet.sj_div] || sheet.sj_div} ·{" "}
+        <span className="font-mono">{sheet.sheetName}</span>{" "}
+        <span className="text-slate-500">({sheet.rowCount}행)</span>
+      </summary>
+      <div className="overflow-x-auto bg-white">
+        <table className="min-w-full text-xs">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <th className="px-2 py-1 text-right">행</th>
+              <th className="px-2 py-1 text-left">코드</th>
+              <th className="px-2 py-1 text-left">계정과목명</th>
+              <th className="px-2 py-1 text-right">당기금액</th>
+              <th className="px-2 py-1 text-right">전기금액</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {sheet.preview.map((p) => (
+              <tr key={p.rowIndex}>
+                <td className="px-2 py-1 text-right font-mono text-slate-400">
+                  {p.rowIndex}
+                </td>
+                <td className="px-2 py-1 font-mono text-slate-500">
+                  {p.account_id || "-"}
+                </td>
+                <td className="px-2 py-1 text-slate-900">{p.account_nm}</td>
+                <td className="px-2 py-1 text-right font-mono">
+                  {p.thstrm_amount != null
+                    ? p.thstrm_amount.toLocaleString("ko-KR")
+                    : "-"}
+                </td>
+                <td className="px-2 py-1 text-right font-mono text-slate-500">
+                  {p.frmtrm_amount != null
+                    ? p.frmtrm_amount.toLocaleString("ko-KR")
+                    : "-"}
+                </td>
+              </tr>
+            ))}
+            {sheet.rowCount > sheet.preview.length && (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-2 py-1 text-center text-xs text-slate-400"
+                >
+                  ... 외 {sheet.rowCount - sheet.preview.length}행
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
+function Stage2Rules({ report }: { report: ValidationReport }) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <StageHeader
+        no={2}
+        title="검증 룰 적용 단계"
+        subtitle="각 룰이 어떤 데이터를 보고 어떻게 계산해 어떤 결과를 냈는지"
+      />
+      <div className="space-y-4">
+        {report.ruleResults.map((r) => (
+          <RuleCard key={r.rule_id} ruleResult={r} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RuleCard({
+  ruleResult,
+}: {
+  ruleResult: ValidationReport["ruleResults"][number];
+}) {
+  const statusStyle = {
+    pass: "border-emerald-200 bg-emerald-50",
+    fail: "border-rose-200 bg-rose-50",
+    warn: "border-amber-200 bg-amber-50",
+    skip: "border-slate-200 bg-slate-50",
+  }[ruleResult.status];
+
+  return (
+    <div className={`rounded-lg border p-4 ${statusStyle}`}>
+      <div className="mb-2 flex items-center gap-2">
+        <StatusBadge status={ruleResult.status} />
+        <span className="font-medium text-slate-900">
+          {ruleResult.rule_name}
+        </span>
+        <span className="ml-auto font-mono text-xs text-slate-400">
+          {ruleResult.rule_id}
+        </span>
+      </div>
+      <p className="text-xs text-slate-700">{ruleResult.rule_description}</p>
+
+      {ruleResult.traces.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {ruleResult.traces.map((t, i) => (
+            <TraceCard key={i} trace={t} />
+          ))}
+        </div>
+      )}
+
+      {ruleResult.issues.length > 0 && (
+        <div className="mt-3 rounded-md bg-white/70 p-3">
+          <p className="mb-1 text-xs font-semibold text-slate-700">
+            발견된 이슈 {ruleResult.issues.length}건
+          </p>
+          <ul className="space-y-1 text-xs">
+            {ruleResult.issues.map((iss, i) => (
+              <li
+                key={i}
+                className={
+                  iss.severity === "error"
+                    ? "text-rose-700"
+                    : iss.severity === "warning"
+                      ? "text-amber-700"
+                      : "text-slate-600"
+                }
+              >
+                • {iss.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TraceCard({ trace }: { trace: RuleTrace }) {
+  const statusColor =
+    trace.status === "match"
+      ? "bg-emerald-100 text-emerald-700"
+      : trace.status === "mismatch"
+        ? "bg-rose-100 text-rose-700"
+        : "bg-slate-200 text-slate-600";
+  const statusLabel =
+    trace.status === "match"
+      ? "매치"
+      : trace.status === "mismatch"
+        ? "불일치"
+        : "데이터 부족";
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3 text-xs">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span
+          className={`rounded px-1.5 py-0.5 font-medium ${statusColor}`}
+        >
+          {statusLabel}
+        </span>
+        <span className="text-slate-500">{trace.scope_label}</span>
+      </div>
+      <div className="mb-2">
+        <span className="text-slate-500">공식: </span>
+        <span className="font-mono text-slate-900">{trace.formula}</span>
+      </div>
+      {trace.inputs.length > 0 && (
+        <div className="mb-2">
+          <p className="mb-1 text-slate-500">입력 데이터:</p>
+          <ul className="ml-3 space-y-0.5">
+            {trace.inputs.map((inp, i) => (
+              <InputRow key={i} input={inp} />
+            ))}
+          </ul>
+        </div>
+      )}
+      <div>
+        <span className="text-slate-500">계산 결과: </span>
+        <span className="font-mono text-slate-900">{trace.computation}</span>
+      </div>
+    </div>
+  );
+}
+
+function InputRow({ input }: { input: TraceInput }) {
+  return (
+    <li className="flex flex-wrap items-baseline gap-1">
+      <span className="text-slate-700">{input.label}</span>
+      <span className="text-slate-400">=</span>
+      <span className="font-mono text-slate-900">
+        {input.value == null
+          ? "(없음)"
+          : typeof input.value === "number"
+            ? input.value.toLocaleString("ko-KR")
+            : input.value}
+      </span>
+      {input.ref?.row && (
+        <span className="ml-1 text-slate-400">
+          [행 {input.ref.row}
+          {input.ref.account_nm ? ` · ${input.ref.account_nm}` : ""}]
+        </span>
+      )}
+    </li>
+  );
+}
+
+function Stage3Result({ report }: { report: ValidationReport }) {
+  const { summary } = report;
+  const hasFails = summary.failed > 0;
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <StageHeader
+        no={3}
+        title="최종 결과"
+        subtitle="모든 룰의 종합"
+      />
+      <div className="mb-3 flex flex-wrap gap-2 text-sm">
+        <Pill color="emerald">통과 {summary.passed}</Pill>
+        <Pill color="rose">실패 {summary.failed}</Pill>
+        <Pill color="amber">경고 {summary.warnings}</Pill>
+        <Pill color="slate">스킵 {summary.skipped}</Pill>
+        <Pill color="slate">총 {summary.total_rules}</Pill>
+      </div>
+      <p
+        className={`text-sm font-semibold ${
+          hasFails ? "text-rose-700" : "text-emerald-700"
+        }`}
+      >
+        {hasFails
+          ? "⚠ 정합성 오류가 발견되었습니다. Step 2의 룰 카드에서 자세한 내용 확인."
+          : "✓ 모든 필수 룰 통과 — 시트 간 정합성 OK"}
+      </p>
+    </section>
+  );
+}
+
+function StageHeader({
+  no,
+  title,
+  subtitle,
+}: {
+  no: number;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="mb-4 border-b border-slate-100 pb-3">
+      <div className="flex items-center gap-2">
+        <span className="grid h-7 w-7 place-items-center rounded-full bg-slate-900 font-mono text-xs text-white">
+          {no}
+        </span>
+        <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+      </div>
+      <p className="mt-1 ml-9 text-xs text-slate-500">{subtitle}</p>
     </div>
   );
 }
@@ -226,7 +571,11 @@ function Pill({
   );
 }
 
-function StatusBadge({ status }: { status: "pass" | "fail" | "warn" | "skip" }) {
+function StatusBadge({
+  status,
+}: {
+  status: "pass" | "fail" | "warn" | "skip";
+}) {
   const map = {
     pass: { color: "bg-emerald-100 text-emerald-700", label: "✓ 통과" },
     fail: { color: "bg-rose-100 text-rose-700", label: "✗ 실패" },

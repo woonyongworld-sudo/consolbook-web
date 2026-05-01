@@ -1,6 +1,7 @@
 import type {
   Issue,
   Rule,
+  RuleTrace,
   Severity,
   ValidationContext,
   ValidationReport,
@@ -14,9 +15,12 @@ export function runValidation(
 
   for (const rule of rules) {
     let issues: Issue[] = [];
+    let traces: RuleTrace[] = [];
     let errored = false;
     try {
-      issues = rule.check(ctx);
+      const result = rule.check(ctx);
+      issues = result.issues;
+      traces = result.traces;
     } catch (e) {
       errored = true;
       issues = [
@@ -28,14 +32,17 @@ export function runValidation(
           }`,
         },
       ];
+      traces = [];
     }
-    const status = decideStatus(rule.severity, issues, errored);
+    const status = decideStatus(rule.severity, issues, traces, errored);
     ruleResults.push({
       rule_id: rule.id,
       rule_name: rule.name,
+      rule_description: rule.description,
       severity: rule.severity,
       status,
       issues,
+      traces,
     });
   }
 
@@ -58,12 +65,20 @@ export function runValidation(
 function decideStatus(
   ruleSeverity: Severity,
   issues: Issue[],
+  traces: RuleTrace[],
   errored: boolean,
 ): "pass" | "fail" | "warn" | "skip" {
   if (errored) return "fail";
+  // 데이터 누락(missing) trace만 있고 issue가 없으면 skip
+  if (
+    issues.length === 0 &&
+    traces.length > 0 &&
+    traces.every((t) => t.status === "missing")
+  ) {
+    return "skip";
+  }
   if (issues.length === 0) return "pass";
-  // 룰 자체 severity로 status 매핑
   if (ruleSeverity === "error") return "fail";
   if (ruleSeverity === "warning") return "warn";
-  return "skip"; // info severity는 skip 처리
+  return "skip";
 }

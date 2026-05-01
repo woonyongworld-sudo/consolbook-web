@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import {
+  COLUMN_MAPPING,
   RULES,
+  SJ_PATTERNS,
   readPackageXlsx,
   runValidation,
 } from "@/modules/validation";
@@ -35,12 +37,17 @@ export async function POST(req: Request) {
         {
           error:
             "재무제표 시트를 찾을 수 없습니다. dart-package-importer가 만든 .xlsx인지 확인하세요.",
+          extraction_meta: extractionMeta(),
         },
         { status: 422 },
       );
     }
     const report = runValidation(ctx, RULES);
-    return NextResponse.json({ report, fs_summary: summarizeFs(ctx) });
+    return NextResponse.json({
+      report,
+      extraction_meta: extractionMeta(),
+      fs_summary: summarizeFs(ctx),
+    });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "검증 실패" },
@@ -55,7 +62,26 @@ function summarizeFs(ctx: Awaited<ReturnType<typeof readPackageXlsx>>) {
     sj_div: s.sj_div,
     sheetName: s.sheetName,
     rowCount: s.rows.length,
+    // 처음 8행만 미리보기로 — 사용자가 추출 결과 확인 가능
+    preview: s.rows.slice(0, 8).map((r) => ({
+      rowIndex: r.rowIndex,
+      account_id: r.account_id,
+      account_nm: r.account_nm,
+      thstrm_amount: r.thstrm_amount ?? null,
+      frmtrm_amount: r.frmtrm_amount ?? null,
+    })),
   }));
+}
+
+function extractionMeta() {
+  return {
+    expectedSheets: SJ_PATTERNS.map((p) => ({
+      fs_div: p.fs_div,
+      sj_div: p.sj_div,
+      expectedName: p.expectedName,
+    })),
+    columnMapping: COLUMN_MAPPING,
+  };
 }
 
 export const maxDuration = 60;
