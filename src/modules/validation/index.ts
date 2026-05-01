@@ -6,8 +6,17 @@ export {
   COLUMN_MAPPING,
 } from "./domain/excel-reader";
 export type { SheetMappingInput } from "./domain/excel-reader";
-export { detectSheetsFromXlsx } from "./domain/sheet-mapper";
-export type { DetectedSheet } from "./domain/sheet-mapper";
+export {
+  detectSheetsFromXlsx,
+  matchHeaders,
+  extractHeaderRow,
+} from "./domain/sheet-mapper";
+export type {
+  DetectedSheet,
+  HeaderMatchInput,
+  HeaderMatchResult,
+} from "./domain/sheet-mapper";
+export type { ColumnMappingInput } from "./domain/excel-reader";
 export type {
   Severity,
   Rule,

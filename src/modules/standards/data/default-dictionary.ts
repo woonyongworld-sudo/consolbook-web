@@ -27,7 +27,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           required: true,
         },
         {
-          key: "amount",
+          key: "thstrm_amount",
           label: "금액",
           description: "당기 금액 (원 단위, 음수도 가능)",
           dataType: "number",
@@ -78,7 +78,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           required: true,
         },
         {
-          key: "amount",
+          key: "thstrm_amount",
           label: "금액",
           description: "당기 금액",
           dataType: "number",
@@ -129,7 +129,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           required: true,
         },
         {
-          key: "amount",
+          key: "thstrm_amount",
           label: "금액",
           description: "당기 금액 (음수 가능)",
           dataType: "number",
@@ -173,7 +173,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           required: true,
         },
         {
-          key: "amount",
+          key: "thstrm_amount",
           label: "변동금액",
           description: "기간 중 변동 금액 (증감)",
           dataType: "number",
@@ -217,7 +217,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           enumValues: ["영업활동", "투자활동", "재무활동"],
         },
         {
-          key: "amount",
+          key: "thstrm_amount",
           label: "금액",
           description: "현금 유입(+) 또는 유출(-) 금액",
           dataType: "number",

@@ -46,6 +46,9 @@ export type NormalizedRow = {
   frmtrm_amount?: number;
   bfefrmtrm_amount?: number;
   rowIndex: number; // 1-based row in sheet
+  // 사용자 매핑으로 추출된 모든 표준 키별 값.
+  // 표준 사전이 추가하는 새 헤더(예: dr_cr, activity)도 여기 들어감.
+  values?: Record<string, string | number | null>;
 };
 
 // 룰이 무엇을 어떻게 검증했는지의 자취. 통과/실패와 무관하게 항상 생성되어

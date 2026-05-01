@@ -104,6 +104,8 @@ export default function ValidationWorkspace() {
         externalSheetName: m.externalSheetName,
         standardType: m.standardType as "BS" | "IS" | "CIS" | "CF" | "SCE",
         fs_div: m.fs_div,
+        headerRow: m.headerConfig?.headerRow,
+        columnMappings: m.headerConfig?.columnMappings,
       }));
 
     if (validMappings.length === 0) {

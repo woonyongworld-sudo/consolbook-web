@@ -86,11 +86,19 @@ export const COLUMN_MAPPING = [
 ] as const;
 
 // 사용자 시트 매핑 — 외부 시트명을 표준 시트 유형(BS/IS/...)에 연결.
-// 추가로 별도/연결 구분(fs_div)도 명시. 둘 다 사용자가 매핑 단계에서 결정.
+// v2: 헤더 행 + 컬럼 매핑(외부 컬럼 ↔ 표준 헤더 키) 포함.
 export type SheetMappingInput = {
   externalSheetName: string;
   standardType: "BS" | "IS" | "CIS" | "CF" | "SCE" | "NOTE";
   fs_div: "OFS" | "CFS";
+  // v2: 헤더 행 + 컬럼 매핑 (생략 가능 — 디폴트 = 1행 헤더, 표준 6컬럼 순서)
+  headerRow?: number; // 1-based
+  columnMappings?: ColumnMappingInput[];
+};
+
+export type ColumnMappingInput = {
+  standardKey: string; // "account_id" 등
+  externalCol: number | null; // 1-based, null = 매핑 안 함
 };
 
 export async function readPackageXlsx(
@@ -106,11 +114,13 @@ export async function readPackageXlsx(
   if (mappings && mappings.length > 0) {
     // 사용자 매핑 사용
     for (const m of mappings) {
-      // FS 4종만 정규 검증 대상 (NOTE는 향후)
       if (m.standardType === "NOTE") continue;
       const ws = wb.getWorksheet(m.externalSheetName);
       if (!ws) continue;
-      const rows = readFsSheet(ws);
+      const rows =
+        m.columnMappings && m.columnMappings.length > 0
+          ? readFsSheetWithMapping(ws, m.headerRow ?? 1, m.columnMappings)
+          : readFsSheet(ws);
       fs.push({
         fs_div: m.fs_div,
         sj_div: m.standardType,
@@ -168,6 +178,98 @@ function readFsSheet(ws: ExcelJS.Worksheet): NormalizedRow[] {
     });
   });
   return out;
+}
+
+// v2: 사용자 컬럼 매핑 + 헤더 행 기반으로 시트 읽기.
+// 매핑이 없는 표준 키는 빈 값. 매핑된 키는 외부 컬럼에서 읽음.
+function readFsSheetWithMapping(
+  ws: ExcelJS.Worksheet,
+  headerRow: number,
+  mappings: ColumnMappingInput[],
+): NormalizedRow[] {
+  const out: NormalizedRow[] = [];
+  // 매핑을 standardKey 키로 빠르게 조회
+  const map: Record<string, number | null> = {};
+  for (const m of mappings) map[m.standardKey] = m.externalCol;
+
+  ws.eachRow((row, rowIndex) => {
+    if (rowIndex <= headerRow) return; // 헤더 + 그 이전 행은 건너뜀
+    const values: Record<string, string | number | null> = {};
+    let hasContent = false;
+
+    for (const [key, col] of Object.entries(map)) {
+      if (col == null) {
+        values[key] = null;
+        continue;
+      }
+      const raw = row.getCell(col).value;
+      // 숫자형 키는 number 시도, 그 외는 text
+      const isNumericKey = NUMERIC_KEYS.has(key);
+      if (isNumericKey) {
+        const n = cellToNumber(raw);
+        values[key] = n ?? null;
+        if (n != null) hasContent = true;
+      } else {
+        const t = cellToText(raw);
+        values[key] = t || null;
+        if (t) hasContent = true;
+      }
+    }
+
+    if (!hasContent) return;
+
+    out.push({
+      account_id: String(values.account_id ?? ""),
+      account_nm: String(values.account_nm ?? ""),
+      thstrm_amount:
+        typeof values.thstrm_amount === "number"
+          ? values.thstrm_amount
+          : undefined,
+      frmtrm_amount:
+        typeof values.frmtrm_amount === "number"
+          ? values.frmtrm_amount
+          : undefined,
+      bfefrmtrm_amount:
+        typeof values.bfefrmtrm_amount === "number"
+          ? values.bfefrmtrm_amount
+          : undefined,
+      rowIndex,
+      values,
+    });
+  });
+  return out;
+}
+
+const NUMERIC_KEYS = new Set([
+  "amount",
+  "thstrm_amount",
+  "frmtrm_amount",
+  "bfefrmtrm_amount",
+]);
+
+function cellToText(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "object") {
+    const obj = v as {
+      result?: unknown;
+      richText?: Array<{ text: string }>;
+      text?: string;
+    };
+    if (typeof obj.result === "string") return obj.result.trim();
+    if (typeof obj.result === "number") return String(obj.result);
+    if (Array.isArray(obj.richText)) {
+      return obj.richText
+        .map((rt) => rt.text || "")
+        .join("")
+        .trim();
+    }
+    if (typeof obj.text === "string") return obj.text.trim();
+  }
+  return "";
 }
 
 function cellToNumber(v: unknown): number | undefined {
