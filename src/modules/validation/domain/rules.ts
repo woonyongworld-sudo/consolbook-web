@@ -42,6 +42,15 @@ export const RULES: Rule[] = [
     scope: "cross_sheet",
     check: ofsCfsEquityCheck,
   },
+  {
+    id: "HEADER_LIST_MEMBERSHIP",
+    name: "헤더 값 마스터 참조 검증",
+    description:
+      "표준 사전에서 데이터 유효성 검사가 'list' 또는 'enum'으로 설정된 헤더에 대해, 외부 데이터의 값이 참조 마스터(또는 inline enum)에 있는지 점검합니다.",
+    severity: "error",
+    scope: "fs",
+    check: headerListCheck,
+  },
 ];
 
 type AmountField = "thstrm_amount" | "frmtrm_amount" | "bfefrmtrm_amount";
@@ -261,4 +270,140 @@ function buildInput(
 
 function fmt(n: number): string {
   return n.toLocaleString("ko-KR");
+}
+
+// v3: 헤더의 validation 설정에 따라 데이터 값이 마스터/enum에 있는지 검사.
+function headerListCheck(ctx: ValidationContext): RuleResult {
+  const issues: Issue[] = [];
+  const traces: RuleTrace[] = [];
+  if (!ctx.dict) {
+    traces.push({
+      formula: "외부 값 ∈ 표준 사전 마스터",
+      scope_label: "전체",
+      inputs: [],
+      computation: "표준 사전이 전달되지 않아 검증 스킵.",
+      status: "missing",
+    });
+    return { issues, traces };
+  }
+
+  // 빠른 마스터 조회 인덱스 (key → Set<코드값>)
+  const masterIndex = new Map<string, { codes: Set<string>; labels: Set<string> }>();
+  for (const list of ctx.dict.lists) {
+    masterIndex.set(list.key, {
+      codes: new Set(list.items.map((it) => normalizeKor(it.code))),
+      labels: new Set(list.items.map((it) => normalizeKor(it.label))),
+    });
+  }
+
+  for (const fs of ctx.fs) {
+    const spec = ctx.dict.sheets.find((s) => s.type === fs.standardType);
+    if (!spec) continue;
+
+    // validation 설정된 헤더만 검사
+    const checkedHeaders = spec.headers.filter(
+      (h) =>
+        h.validation &&
+        (h.validation.type === "list" || h.validation.type === "enum"),
+    );
+    if (checkedHeaders.length === 0) continue;
+
+    for (const header of checkedHeaders) {
+      const v = header.validation!;
+      let allowedSet: Set<string> | null = null;
+      let scopeDesc = "";
+
+      if (v.type === "list") {
+        const idx = masterIndex.get(v.listKey);
+        if (!idx) {
+          traces.push({
+            formula: `값 ∈ 마스터["${v.listKey}"]`,
+            scope_label: `${fs.sheetName} · ${header.label}`,
+            inputs: [],
+            computation: `마스터 "${v.listKey}"를 찾을 수 없습니다.`,
+            status: "missing",
+          });
+          continue;
+        }
+        allowedSet = v.matchField === "label" ? idx.labels : idx.codes;
+        scopeDesc = `마스터[${v.listKey}.${v.matchField ?? "code"}]`;
+      } else if (v.type === "enum") {
+        const enumVals = (header.enumValues ?? []).map(normalizeKor);
+        if (enumVals.length === 0) continue;
+        allowedSet = new Set(enumVals);
+        scopeDesc = `inline enum [${header.enumValues!.join(", ")}]`;
+      }
+
+      if (!allowedSet) continue;
+
+      // 행 단위 점검
+      const violatedRows: Array<{ row: number; value: string }> = [];
+      for (const row of fs.rows) {
+        const rawValue = pickValueForKey(row, header.key);
+        if (rawValue == null || rawValue === "") continue; // 빈 값은 별개 (필수 누락 룰 영역)
+        const normalized = normalizeKor(String(rawValue));
+        if (!allowedSet.has(normalized)) {
+          violatedRows.push({ row: row.rowIndex, value: String(rawValue) });
+        }
+      }
+
+      const totalChecked = fs.rows.filter(
+        (r) => pickValueForKey(r, header.key) != null,
+      ).length;
+      const okCount = totalChecked - violatedRows.length;
+
+      traces.push({
+        formula: `${header.label} ∈ ${scopeDesc}`,
+        scope_label: `${fs.sheetName} · ${header.label}`,
+        inputs: [
+          { label: "검사 행 수", value: totalChecked },
+          { label: "통과", value: okCount },
+          { label: "위반", value: violatedRows.length },
+        ],
+        computation:
+          violatedRows.length === 0
+            ? `${totalChecked}행 모두 마스터 값과 일치 ✓`
+            : `${violatedRows.length}건 불일치 — 예: ${violatedRows
+                .slice(0, 3)
+                .map((v) => `행 ${v.row} "${v.value}"`)
+                .join(", ")}${violatedRows.length > 3 ? ` 외 ${violatedRows.length - 3}건` : ""}`,
+        status: violatedRows.length === 0 ? "match" : "mismatch",
+      });
+
+      // 행 단위 issue 발급 (최대 5건)
+      for (const v of violatedRows.slice(0, 5)) {
+        issues.push({
+          rule_id: "HEADER_LIST_MEMBERSHIP",
+          severity: "error",
+          message: `${fs.sheetName} 행 ${v.row}: "${header.label}" 값 "${v.value}"은(는) ${scopeDesc}에 없습니다.`,
+          ref: { sheet: fs.sheetName, row: v.row, account_nm: header.label },
+          actual: v.value,
+        });
+      }
+      if (violatedRows.length > 5) {
+        issues.push({
+          rule_id: "HEADER_LIST_MEMBERSHIP",
+          severity: "error",
+          message: `... 외 ${violatedRows.length - 5}건의 "${header.label}" 위반이 더 있습니다.`,
+          ref: { sheet: fs.sheetName, account_nm: header.label },
+        });
+      }
+    }
+  }
+
+  return { issues, traces };
+}
+
+// 표준 키에 해당하는 값을 row에서 꺼내기 (NormalizedRow.values 우선, 그다음 shortcut)
+function pickValueForKey(
+  row: NormalizedRow,
+  key: string,
+): string | number | null {
+  if (row.values && key in row.values) return row.values[key];
+  if (key === "account_id") return row.account_id || null;
+  if (key === "account_nm") return row.account_nm || null;
+  if (key === "thstrm_amount") return row.thstrm_amount ?? null;
+  if (key === "frmtrm_amount") return row.frmtrm_amount ?? null;
+  if (key === "bfefrmtrm_amount") return row.bfefrmtrm_amount ?? null;
+  return null;
 }

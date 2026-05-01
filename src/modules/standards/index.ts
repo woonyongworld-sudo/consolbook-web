@@ -3,6 +3,9 @@ export type {
   StandardSheetSpec,
   StandardHeader,
   StandardDataType,
+  HeaderValidation,
+  ListMaster,
+  ListItem,
 } from "./domain/types";
 
 export { DEFAULT_DICTIONARY } from "./data/default-dictionary";

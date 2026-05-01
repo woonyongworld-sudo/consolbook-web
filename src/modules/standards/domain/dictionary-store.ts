@@ -16,6 +16,10 @@ export function loadDictionary(): StandardDictionary {
     if (!raw) return DEFAULT_DICTIONARY;
     const parsed = JSON.parse(raw) as StandardDictionary;
     if (!parsed || !Array.isArray(parsed.sheets)) return DEFAULT_DICTIONARY;
+    // v3 호환성: lists 필드 없는 구버전 사전이면 디폴트 마스터 보충
+    if (!Array.isArray(parsed.lists)) {
+      return { ...parsed, lists: DEFAULT_DICTIONARY.lists };
+    }
     return parsed;
   } catch {
     return DEFAULT_DICTIONARY;

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import type { ValidationReport, RuleTrace, TraceInput } from "../domain/types";
 import type { DetectedSheet } from "../domain/sheet-mapper";
 import { SheetMappingPanel, type UserMapping } from "./SheetMappingPanel";
+import { useDictionary } from "@/modules/standards";
 
 type FsSummary = {
   fs_div: "OFS" | "CFS";
@@ -44,6 +45,7 @@ const SJ_LABEL: Record<string, string> = {
 };
 
 export default function ValidationWorkspace() {
+  const { dict } = useDictionary();
   const inputRef = useRef<HTMLInputElement>(null);
   const [filename, setFilename] = useState<string>("");
   const [fileBase64, setFileBase64] = useState<string>("");
@@ -122,6 +124,7 @@ export default function ValidationWorkspace() {
         body: JSON.stringify({
           fileBase64,
           mappings: validMappings,
+          dict,
         }),
       });
       const data = await res.json();

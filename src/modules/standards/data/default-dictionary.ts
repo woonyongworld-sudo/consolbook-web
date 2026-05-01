@@ -3,7 +3,7 @@ import type { StandardDictionary } from "../domain/types";
 // 디폴트 표준 사전 — 사용자가 편집 페이지에서 수정·추가·제거할 수 있음.
 // 첫 로드 시 또는 "디폴트로 리셋" 시 이 값이 사용됨.
 export const DEFAULT_DICTIONARY: StandardDictionary = {
-  version: "1.0.0",
+  version: "1.1.0",
   updated_at: "2026-05-01T00:00:00Z",
   sheets: [
     {
@@ -18,6 +18,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           description: "표준계정과목 마스터의 코드 (예: 1000001)",
           dataType: "code",
           required: true,
+          validation: { type: "list", listKey: "consolidation_coa", matchField: "code" },
         },
         {
           key: "account_nm",
@@ -40,6 +41,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           dataType: "enum",
           required: true,
           enumValues: ["차변", "대변"],
+          validation: { type: "enum" },
         },
         {
           key: "frmtrm_amount",
@@ -69,6 +71,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           description: "표준계정과목 마스터의 코드",
           dataType: "code",
           required: true,
+          validation: { type: "list", listKey: "consolidation_coa", matchField: "code" },
         },
         {
           key: "account_nm",
@@ -91,6 +94,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           dataType: "enum",
           required: true,
           enumValues: ["차변", "대변"],
+          validation: { type: "enum" },
         },
         {
           key: "frmtrm_amount",
@@ -120,6 +124,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           description: "표준계정과목 마스터의 코드",
           dataType: "code",
           required: true,
+          validation: { type: "list", listKey: "consolidation_coa", matchField: "code" },
         },
         {
           key: "account_nm",
@@ -171,6 +176,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
             "자본금 / 자본잉여금 / 자본조정 / 기타포괄손익누계액 / 이익잉여금 / 비지배지분 등",
           dataType: "text",
           required: true,
+          validation: { type: "list", listKey: "equity_components", matchField: "label" },
         },
         {
           key: "thstrm_amount",
@@ -215,6 +221,7 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           dataType: "enum",
           required: true,
           enumValues: ["영업활동", "투자활동", "재무활동"],
+          validation: { type: "enum" },
         },
         {
           key: "thstrm_amount",
@@ -266,6 +273,78 @@ export const DEFAULT_DICTIONARY: StandardDictionary = {
           dataType: "text",
           required: false,
         },
+      ],
+    },
+  ],
+  lists: [
+    {
+      key: "consolidation_coa",
+      label: "연결 표준계정과목 (COA)",
+      description:
+        "연결정산표 모듈이 인식하는 표준계정과목 코드 마스터. 외부 시트의 account_id 값이 이 목록에 있어야 정산표 적재가 가능합니다.",
+      items: [
+        // BS · 자산
+        { code: "1000001", label: "현금및예치금", meta: { class: "자산" } },
+        { code: "1000002", label: "단기금융상품", meta: { class: "자산" } },
+        { code: "1000003", label: "매출채권", meta: { class: "자산" } },
+        { code: "1000004", label: "재고자산", meta: { class: "자산" } },
+        { code: "1000005", label: "유형자산", meta: { class: "자산" } },
+        { code: "1000006", label: "무형자산", meta: { class: "자산" } },
+        { code: "1000007", label: "투자부동산", meta: { class: "자산" } },
+        { code: "1000008", label: "관계기업투자", meta: { class: "자산" } },
+        { code: "1000009", label: "이연법인세자산", meta: { class: "자산" } },
+        { code: "1000099", label: "자산총계", meta: { class: "자산", total: "Y" } },
+        // BS · 부채
+        { code: "2000001", label: "매입채무", meta: { class: "부채" } },
+        { code: "2000002", label: "차입부채", meta: { class: "부채" } },
+        { code: "2000003", label: "충당부채", meta: { class: "부채" } },
+        { code: "2000004", label: "이연법인세부채", meta: { class: "부채" } },
+        { code: "2000099", label: "부채총계", meta: { class: "부채", total: "Y" } },
+        // BS · 자본
+        { code: "3000001", label: "자본금", meta: { class: "자본" } },
+        { code: "3000002", label: "자본잉여금", meta: { class: "자본" } },
+        { code: "3000003", label: "자본조정", meta: { class: "자본" } },
+        { code: "3000004", label: "기타포괄손익누계액", meta: { class: "자본" } },
+        { code: "3000005", label: "이익잉여금", meta: { class: "자본" } },
+        { code: "3000006", label: "비지배지분", meta: { class: "자본" } },
+        { code: "3000099", label: "자본총계", meta: { class: "자본", total: "Y" } },
+        // IS · 손익
+        { code: "4000001", label: "매출액", meta: { class: "수익" } },
+        { code: "4000002", label: "매출원가", meta: { class: "비용" } },
+        { code: "4000003", label: "판매비와관리비", meta: { class: "비용" } },
+        { code: "4000004", label: "영업이익", meta: { class: "손익" } },
+        { code: "4000005", label: "법인세비용", meta: { class: "비용" } },
+        { code: "4000099", label: "당기순이익", meta: { class: "손익", total: "Y" } },
+        { code: "5000001", label: "수수료수익", meta: { class: "수익" } },
+        { code: "5000002", label: "수수료비용", meta: { class: "비용" } },
+        // CF · 현금흐름
+        { code: "6000001", label: "영업활동현금흐름", meta: { class: "현금흐름" } },
+        { code: "6000002", label: "투자활동현금흐름", meta: { class: "현금흐름" } },
+        { code: "6000003", label: "재무활동현금흐름", meta: { class: "현금흐름" } },
+        { code: "6000099", label: "현금증감액", meta: { class: "현금흐름", total: "Y" } },
+      ],
+    },
+    {
+      key: "equity_components",
+      label: "자본 구성요소",
+      description: "자본변동표에서 사용하는 자본 항목 분류.",
+      items: [
+        { code: "EC01", label: "자본금" },
+        { code: "EC02", label: "자본잉여금" },
+        { code: "EC03", label: "자본조정" },
+        { code: "EC04", label: "기타포괄손익누계액" },
+        { code: "EC05", label: "이익잉여금" },
+        { code: "EC06", label: "비지배지분" },
+      ],
+    },
+    {
+      key: "activity_types",
+      label: "현금흐름 활동구분",
+      description: "현금흐름표 항목의 활동 분류.",
+      items: [
+        { code: "OP", label: "영업활동" },
+        { code: "INV", label: "투자활동" },
+        { code: "FIN", label: "재무활동" },
       ],
     },
   ],

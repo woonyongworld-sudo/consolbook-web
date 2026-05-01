@@ -7,6 +7,10 @@ import {
   runValidation,
   type SheetMappingInput,
 } from "@/modules/validation";
+import {
+  DEFAULT_DICTIONARY,
+  type StandardDictionary,
+} from "@/modules/standards";
 
 // 두 가지 입력 방식 지원:
 //  1. JSON body { fileBase64, mappings? } — 사용자 시트 매핑이 있을 때
@@ -15,12 +19,14 @@ export async function POST(req: Request) {
   const contentType = req.headers.get("content-type") || "";
   let buf: ArrayBuffer;
   let mappings: SheetMappingInput[] | undefined;
+  let dict: StandardDictionary = DEFAULT_DICTIONARY;
 
   try {
     if (contentType.includes("application/json")) {
       const body = (await req.json()) as {
         fileBase64?: string;
         mappings?: SheetMappingInput[];
+        dict?: StandardDictionary;
       };
       if (!body.fileBase64) {
         return NextResponse.json(
@@ -30,6 +36,7 @@ export async function POST(req: Request) {
       }
       buf = base64ToArrayBuffer(body.fileBase64);
       mappings = body.mappings;
+      if (body.dict) dict = body.dict;
     } else {
       buf = await req.arrayBuffer();
     }
@@ -55,6 +62,7 @@ export async function POST(req: Request) {
 
   try {
     const ctx = await readPackageXlsx(buf, mappings);
+    ctx.dict = dict;
     if (ctx.fs.length === 0) {
       return NextResponse.json(
         {

@@ -124,6 +124,7 @@ export async function readPackageXlsx(
       fs.push({
         fs_div: m.fs_div,
         sj_div: m.standardType,
+        standardType: m.standardType,
         sheetName: m.externalSheetName,
         rows,
       });
@@ -137,6 +138,7 @@ export async function readPackageXlsx(
       fs.push({
         fs_div: matched.fs_div,
         sj_div: matched.sj_div,
+        standardType: matched.sj_div,
         sheetName: ws.name,
         rows,
       });

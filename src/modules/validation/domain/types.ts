@@ -29,8 +29,11 @@ export type ValidationContext = {
     fs_div: "OFS" | "CFS";
     sj_div: "BS" | "IS" | "CIS" | "CF" | "SCE";
     sheetName: string;
+    standardType: string; // 사전 참조용 (BS, IS, ...)
     rows: NormalizedRow[];
   }[];
+  // v3: 표준 사전 (룰이 헤더 validation·목록 마스터 참조)
+  dict?: import("@/modules/standards").StandardDictionary;
   // 메타 정보
   meta: {
     corp_name?: string;
