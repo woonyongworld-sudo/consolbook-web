@@ -206,7 +206,7 @@ export function SheetMappingPanel({
           )}
         </p>
         <button
-          onClick={onConfirm}
+          onClick={() => onConfirm()}
           disabled={busy || validatableCount === 0}
           className="rounded-lg bg-slate-900 px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
         >
