@@ -5,18 +5,41 @@ import {
   SJ_PATTERNS,
   readPackageXlsx,
   runValidation,
+  type SheetMappingInput,
 } from "@/modules/validation";
 
+// 두 가지 입력 방식 지원:
+//  1. JSON body { fileBase64, mappings? } — 사용자 시트 매핑이 있을 때
+//  2. raw .xlsx body — 호환성 유지 (DART 임포터 표준 양식 그대로)
 export async function POST(req: Request) {
+  const contentType = req.headers.get("content-type") || "";
   let buf: ArrayBuffer;
+  let mappings: SheetMappingInput[] | undefined;
+
   try {
-    buf = await req.arrayBuffer();
+    if (contentType.includes("application/json")) {
+      const body = (await req.json()) as {
+        fileBase64?: string;
+        mappings?: SheetMappingInput[];
+      };
+      if (!body.fileBase64) {
+        return NextResponse.json(
+          { error: "fileBase64가 필요합니다." },
+          { status: 400 },
+        );
+      }
+      buf = base64ToArrayBuffer(body.fileBase64);
+      mappings = body.mappings;
+    } else {
+      buf = await req.arrayBuffer();
+    }
   } catch {
     return NextResponse.json(
       { error: "요청 본문을 읽지 못했습니다." },
       { status: 400 },
     );
   }
+
   if (buf.byteLength === 0) {
     return NextResponse.json(
       { error: "비어있는 파일입니다." },
@@ -31,12 +54,13 @@ export async function POST(req: Request) {
   }
 
   try {
-    const ctx = await readPackageXlsx(buf);
+    const ctx = await readPackageXlsx(buf, mappings);
     if (ctx.fs.length === 0) {
       return NextResponse.json(
         {
-          error:
-            "재무제표 시트를 찾을 수 없습니다. dart-package-importer가 만든 .xlsx인지 확인하세요.",
+          error: mappings
+            ? "사용자 매핑된 시트에서 재무제표 데이터를 추출하지 못했습니다."
+            : "재무제표 시트를 찾을 수 없습니다. 시트 매핑을 진행하거나 DART 임포터로 만든 .xlsx인지 확인하세요.",
           extraction_meta: extractionMeta(),
         },
         { status: 422 },
@@ -47,6 +71,7 @@ export async function POST(req: Request) {
       report,
       extraction_meta: extractionMeta(),
       fs_summary: summarizeFs(ctx),
+      mapping_used: mappings ?? null,
     });
   } catch (e) {
     return NextResponse.json(
@@ -62,7 +87,6 @@ function summarizeFs(ctx: Awaited<ReturnType<typeof readPackageXlsx>>) {
     sj_div: s.sj_div,
     sheetName: s.sheetName,
     rowCount: s.rows.length,
-    // 처음 8행만 미리보기로 — 사용자가 추출 결과 확인 가능
     preview: s.rows.slice(0, 8).map((r) => ({
       rowIndex: r.rowIndex,
       account_id: r.account_id,
@@ -82,6 +106,14 @@ function extractionMeta() {
     })),
     columnMapping: COLUMN_MAPPING,
   };
+}
+
+function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bin = Buffer.from(b64, "base64");
+  const ab = new ArrayBuffer(bin.byteLength);
+  const view = new Uint8Array(ab);
+  for (let i = 0; i < bin.byteLength; i++) view[i] = bin[i];
+  return ab;
 }
 
 export const maxDuration = 60;

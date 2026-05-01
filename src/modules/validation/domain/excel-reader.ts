@@ -85,8 +85,17 @@ export const COLUMN_MAPPING = [
   { col: 6, field: "currency", label: "통화", required: false },
 ] as const;
 
+// 사용자 시트 매핑 — 외부 시트명을 표준 시트 유형(BS/IS/...)에 연결.
+// 추가로 별도/연결 구분(fs_div)도 명시. 둘 다 사용자가 매핑 단계에서 결정.
+export type SheetMappingInput = {
+  externalSheetName: string;
+  standardType: "BS" | "IS" | "CIS" | "CF" | "SCE" | "NOTE";
+  fs_div: "OFS" | "CFS";
+};
+
 export async function readPackageXlsx(
   buf: ArrayBuffer,
+  mappings?: SheetMappingInput[],
 ): Promise<ValidationContext> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buf);
@@ -94,16 +103,34 @@ export async function readPackageXlsx(
   const fs: ValidationContext["fs"] = [];
   const meta = readSummary(wb);
 
-  for (const ws of wb.worksheets) {
-    const matched = SJ_PATTERNS.find((p) => p.match(ws.name));
-    if (!matched) continue;
-    const rows = readFsSheet(ws);
-    fs.push({
-      fs_div: matched.fs_div,
-      sj_div: matched.sj_div,
-      sheetName: ws.name,
-      rows,
-    });
+  if (mappings && mappings.length > 0) {
+    // 사용자 매핑 사용
+    for (const m of mappings) {
+      // FS 4종만 정규 검증 대상 (NOTE는 향후)
+      if (m.standardType === "NOTE") continue;
+      const ws = wb.getWorksheet(m.externalSheetName);
+      if (!ws) continue;
+      const rows = readFsSheet(ws);
+      fs.push({
+        fs_div: m.fs_div,
+        sj_div: m.standardType,
+        sheetName: m.externalSheetName,
+        rows,
+      });
+    }
+  } else {
+    // 기본 동작: 시트명 정확 매칭 (DART 임포터 호환)
+    for (const ws of wb.worksheets) {
+      const matched = SJ_PATTERNS.find((p) => p.match(ws.name));
+      if (!matched) continue;
+      const rows = readFsSheet(ws);
+      fs.push({
+        fs_div: matched.fs_div,
+        sj_div: matched.sj_div,
+        sheetName: ws.name,
+        rows,
+      });
+    }
   }
 
   return { fs, meta };

@@ -2,6 +2,8 @@
 
 import { useRef, useState } from "react";
 import type { ValidationReport, RuleTrace, TraceInput } from "../domain/types";
+import type { DetectedSheet } from "../domain/sheet-mapper";
+import { SheetMappingPanel, type UserMapping } from "./SheetMappingPanel";
 
 type FsSummary = {
   fs_div: "OFS" | "CFS";
@@ -43,33 +45,94 @@ const SJ_LABEL: Record<string, string> = {
 
 export default function ValidationWorkspace() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [result, setResult] = useState<SubmitResult | null>(null);
   const [filename, setFilename] = useState<string>("");
+  const [fileBase64, setFileBase64] = useState<string>("");
+  const [detected, setDetected] = useState<DetectedSheet[] | null>(null);
+  const [mapping, setMapping] = useState<UserMapping[]>([]);
+  const [result, setResult] = useState<SubmitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [phase, setPhase] = useState<
+    "idle" | "detecting" | "mapping" | "validating" | "done"
+  >("idle");
 
   async function handleFile(file: File) {
-    setSubmitting(true);
+    setPhase("detecting");
     setError(null);
     setResult(null);
+    setDetected(null);
+    setMapping([]);
     setFilename(file.name);
     try {
       const buf = await file.arrayBuffer();
-      const res = await fetch("/api/validation/check", {
+      const b64 = arrayBufferToBase64(buf);
+      setFileBase64(b64);
+
+      // 시트 자동 감지
+      const res = await fetch("/api/validation/detect-sheets", {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: buf,
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || `검증 실패 (HTTP ${res.status})`);
-      } else {
-        setResult(data as SubmitResult);
+        setError(data.error || `시트 감지 실패 (HTTP ${res.status})`);
+        setPhase("idle");
+        return;
       }
+      const sheets = data.sheets as DetectedSheet[];
+      setDetected(sheets);
+      // 자동 추론을 초기 매핑으로
+      setMapping(
+        sheets.map((s) => ({
+          externalSheetName: s.name,
+          standardType: s.suggestedStandardType,
+          fs_div: inferFsDiv(s.name),
+        })),
+      );
+      setPhase("mapping");
     } catch (e) {
       setError(e instanceof Error ? e.message : "업로드 실패");
-    } finally {
-      setSubmitting(false);
+      setPhase("idle");
+    }
+  }
+
+  async function handleValidate() {
+    if (!fileBase64 || !mapping) return;
+    const validMappings = mapping
+      .filter((m) => m.standardType && m.standardType !== "NOTE")
+      .map((m) => ({
+        externalSheetName: m.externalSheetName,
+        standardType: m.standardType as "BS" | "IS" | "CIS" | "CF" | "SCE",
+        fs_div: m.fs_div,
+      }));
+
+    if (validMappings.length === 0) {
+      setError("검증할 시트를 매핑해주세요.");
+      return;
+    }
+
+    setPhase("validating");
+    setError(null);
+    try {
+      const res = await fetch("/api/validation/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileBase64,
+          mappings: validMappings,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || `검증 실패 (HTTP ${res.status})`);
+        setPhase("mapping");
+        return;
+      }
+      setResult(data as SubmitResult);
+      setPhase("done");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "검증 실패");
+      setPhase("mapping");
     }
   }
 
@@ -79,41 +142,66 @@ export default function ValidationWorkspace() {
     if (file) handleFile(file);
   }
 
+  function reset() {
+    setPhase("idle");
+    setDetected(null);
+    setMapping([]);
+    setResult(null);
+    setError(null);
+    setFileBase64("");
+    setFilename("");
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
-      <h1 className="text-2xl font-bold text-slate-900">
-        연결패키지 입력/검증
-      </h1>
-      <p className="mt-2 text-sm text-slate-600">
-        .xlsx 파일을 업로드하면 (1) 어떤 시트의 어떤 데이터를 추출했는지, (2)
-        어떤 룰로 어떻게 검증했는지, (3) 최종 결과를 단계별로 표시합니다.
-      </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">
+            연결패키지 입력/검증
+          </h1>
+          <p className="mt-2 text-sm text-slate-600">
+            .xlsx를 업로드하면 시트를 자동 감지하고, 표준 양식 사전과 매핑한 뒤
+            정합성을 검증합니다.
+          </p>
+        </div>
+        {phase !== "idle" && (
+          <button
+            onClick={reset}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+          >
+            새 파일 업로드
+          </button>
+        )}
+      </div>
 
-      <label
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={onDrop}
-        className="mt-6 block cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white p-10 text-center hover:border-slate-400 hover:bg-slate-50"
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".xlsx"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleFile(file);
-          }}
-        />
-        <p className="text-base font-medium text-slate-900">
-          .xlsx 파일을 끌어다 놓거나 클릭해 선택
-        </p>
-        <p className="mt-1 text-xs text-slate-500">
-          DART 패키지 임포터로 만든 파일 권장
-        </p>
-      </label>
+      {phase === "idle" && (
+        <label
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={onDrop}
+          className="mt-6 block cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white p-10 text-center hover:border-slate-400 hover:bg-slate-50"
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleFile(file);
+            }}
+          />
+          <p className="text-base font-medium text-slate-900">
+            .xlsx 파일을 끌어다 놓거나 클릭해 선택
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            DART 임포터 결과물 또는 임의 자회사 양식 모두 지원
+          </p>
+        </label>
+      )}
 
-      {submitting && (
-        <p className="mt-4 text-sm text-slate-500">분석 중…</p>
+      {phase === "detecting" && (
+        <p className="mt-4 text-sm text-slate-500">시트 감지 중…</p>
       )}
 
       {error && (
@@ -122,9 +210,52 @@ export default function ValidationWorkspace() {
         </div>
       )}
 
+      {(phase === "mapping" ||
+        phase === "validating" ||
+        phase === "done") &&
+        detected && (
+          <div className="mt-6 space-y-6">
+            <FileBanner filename={filename} />
+            <SheetMappingPanel
+              detected={detected}
+              mapping={mapping}
+              onMappingChange={setMapping}
+              onConfirm={handleValidate}
+              busy={phase === "validating"}
+            />
+          </div>
+        )}
+
       {result && <ResultPanel result={result} filename={filename} />}
     </div>
   );
+}
+
+function FileBanner({ filename }: { filename: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 text-sm">
+      <span className="text-slate-500">업로드된 파일: </span>
+      <span className="font-mono font-medium text-slate-900">{filename}</span>
+    </div>
+  );
+}
+
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(
+      null,
+      Array.from(bytes.subarray(i, i + chunk)),
+    );
+  }
+  return btoa(bin);
+}
+
+function inferFsDiv(sheetName: string): "OFS" | "CFS" {
+  if (/연결/.test(sheetName)) return "CFS";
+  return "OFS";
 }
 
 function ResultPanel({

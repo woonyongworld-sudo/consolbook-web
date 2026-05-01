@@ -1,6 +1,11 @@
 import Link from "next/link";
 
-export type ModuleKey = "home" | "dart" | "validation" | "demo";
+export type ModuleKey =
+  | "home"
+  | "dart"
+  | "validation"
+  | "demo"
+  | "standards";
 
 export function SiteHeader({ current = "home" }: { current?: ModuleKey }) {
   return (
@@ -21,6 +26,10 @@ export function SiteHeader({ current = "home" }: { current?: ModuleKey }) {
           </NavLink>
           <NavLink href="/demo" active={current === "demo"}>
             정산표<span className="hidden sm:inline"> 작성</span>
+          </NavLink>
+          <span className="hidden text-slate-300 sm:inline">|</span>
+          <NavLink href="/standards" active={current === "standards"}>
+            표준<span className="hidden sm:inline"> 사전</span>
           </NavLink>
         </nav>
       </div>
