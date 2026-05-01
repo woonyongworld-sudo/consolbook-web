@@ -10,18 +10,33 @@ import {
 
 const YEARS = ["2024", "2023", "2022", "2021", "2020"];
 
+type CartItem = {
+  id: string; // local uid
+  corp: CorpSearchHit;
+  year: string;
+  reprt: ReprtCode;
+  role: string;
+  include_ofs: boolean;
+  include_cfs: boolean;
+  include_notes: boolean;
+};
+
 export default function ImporterWorkspace() {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<CorpSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
-  const [selected, setSelected] = useState<CorpSearchHit | null>(null);
-  const [year, setYear] = useState<string>("2023");
-  const [reprt, setReprt] = useState<ReprtCode>("11011");
-  const [check, setCheck] = useState<AvailabilityCheck | null>(null);
+  const [pendingCorp, setPendingCorp] = useState<CorpSearchHit | null>(null);
+  const [pendingYear, setPendingYear] = useState<string>("2023");
+  const [pendingReprt, setPendingReprt] = useState<ReprtCode>("11011");
+  const [pendingRole, setPendingRole] = useState<string>("모회사");
+  const [pendingCheck, setPendingCheck] = useState<AvailabilityCheck | null>(null);
   const [checking, setChecking] = useState(false);
+  const [cart, setCart] = useState<CartItem[]>([]);
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [includeNotes, setIncludeNotes] = useState(true);
+  const [bundleResult, setBundleResult] = useState<
+    { items: BundleItemReport[]; filename: string } | null
+  >(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -45,12 +60,13 @@ export default function ImporterWorkspace() {
   }, [query]);
 
   async function handleSelect(corp: CorpSearchHit) {
-    setSelected(corp);
+    setPendingCorp(corp);
     setHits([]);
     setQuery(corp.corp_name);
-    setCheck(null);
+    setPendingCheck(null);
+    setPendingRole(cart.length === 0 ? "모회사" : `자회사${cart.length}`);
     setError(null);
-    await runCheck(corp, year, reprt);
+    await runCheck(corp, pendingYear, pendingReprt);
   }
 
   async function runCheck(
@@ -66,9 +82,9 @@ export default function ImporterWorkspace() {
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "확인 중 오류");
-        setCheck(null);
+        setPendingCheck(null);
       } else {
-        setCheck(data.availability as AvailabilityCheck);
+        setPendingCheck(data.availability as AvailabilityCheck);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "네트워크 오류");
@@ -77,32 +93,70 @@ export default function ImporterWorkspace() {
     }
   }
 
-  async function handleYearOrReprtChange(
+  async function changeYearOrReprt(
     nextYear: string,
     nextReprt: ReprtCode,
   ) {
-    setYear(nextYear);
-    setReprt(nextReprt);
-    if (selected) {
-      await runCheck(selected, nextYear, nextReprt);
+    setPendingYear(nextYear);
+    setPendingReprt(nextReprt);
+    if (pendingCorp) {
+      await runCheck(pendingCorp, nextYear, nextReprt);
     }
   }
 
-  async function handleBuild() {
-    if (!selected || !check) return;
+  function addToCart() {
+    if (!pendingCorp || !pendingCheck) return;
+    if (!pendingCheck.hasOFS && !pendingCheck.hasCFS) {
+      setError("이 회사·연도 조합은 데이터가 없어 cart에 담을 수 없습니다.");
+      return;
+    }
+    const newItem: CartItem = {
+      id: `${Date.now()}-${pendingCorp.corp_code}`,
+      corp: pendingCorp,
+      year: pendingYear,
+      reprt: pendingReprt,
+      role: pendingRole.trim() || "회사",
+      include_ofs: pendingCheck.hasOFS,
+      include_cfs: pendingCheck.hasCFS,
+      include_notes: true,
+    };
+    setCart((prev) => [...prev, newItem]);
+    // cart에 추가 후 다음 검색 위해 입력 비움 (역할은 기본값으로 진척)
+    setPendingCorp(null);
+    setPendingCheck(null);
+    setQuery("");
+    setPendingRole(`자회사${cart.length + 1}`);
+  }
+
+  function removeFromCart(id: string) {
+    setCart((prev) => prev.filter((c) => c.id !== id));
+  }
+
+  function updateCartItem(id: string, patch: Partial<CartItem>) {
+    setCart((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+    );
+  }
+
+  async function handleBundleDownload() {
+    if (cart.length === 0) return;
     setBuilding(true);
     setError(null);
+    setBundleResult(null);
     try {
-      const res = await fetch("/api/dart/build", {
+      const res = await fetch("/api/dart/build-bundle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          corp_code: selected.corp_code,
-          bsns_year: year,
-          reprt_code: reprt,
-          include_ofs: true,
-          include_cfs: true,
-          include_notes: includeNotes,
+          items: cart.map((c) => ({
+            corp_code: c.corp.corp_code,
+            bsns_year: c.year,
+            reprt_code: c.reprt,
+            include_ofs: c.include_ofs,
+            include_cfs: c.include_cfs,
+            include_notes: c.include_notes,
+            role: c.role,
+          })),
         }),
       });
       if (!res.ok) {
@@ -116,9 +170,22 @@ export default function ImporterWorkspace() {
       a.href = url;
       const cd = res.headers.get("Content-Disposition") || "";
       const m = cd.match(/filename\*=UTF-8''([^;]+)/);
-      a.download = m ? decodeURIComponent(m[1]) : "consolbook-package.xlsx";
+      const filename = m ? decodeURIComponent(m[1]) : "consolbook-bundle.zip";
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+
+      const manifestHeader = res.headers.get("X-Bundle-Manifest");
+      if (manifestHeader) {
+        try {
+          const manifest = JSON.parse(decodeURIComponent(manifestHeader)) as {
+            items: BundleItemReport[];
+          };
+          setBundleResult({ items: manifest.items, filename });
+        } catch {
+          // ignore
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "다운로드 실패");
     } finally {
@@ -127,134 +194,268 @@ export default function ImporterWorkspace() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-6 py-10">
-      <h1 className="text-2xl font-bold text-slate-900">DART 연결패키지 임포터</h1>
+    <div className="mx-auto w-full max-w-6xl px-6 py-10">
+      <h1 className="text-2xl font-bold text-slate-900">
+        DART 연결패키지 임포터
+      </h1>
       <p className="mt-2 text-sm text-slate-600">
-        DART 공시 회사를 검색하고 연도·보고서를 선택하면, 별도/연결 재무제표와
-        주석을 시트로 분리한 .xlsx 샘플 파일을 자동 생성합니다.
+        DART에 공시된 한국 기업의 별도/연결 재무제표와 주석을 추출해 표준
+        연결패키지 양식 .xlsx로 만듭니다. 모회사 + 자회사를 한꺼번에 cart에
+        담아 .zip으로 받을 수도 있습니다.
       </p>
 
-      <Section step={1} title="회사 검색">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSelected(null);
-            setCheck(null);
-          }}
-          placeholder="회사명 입력 (예: 키움증권)"
-          className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-base focus:border-slate-500 focus:outline-none"
-        />
-        {searching && (
-          <p className="mt-2 text-xs text-slate-500">검색중…</p>
-        )}
-        {hits.length > 0 && (
-          <ul className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white">
-            {hits.map((c) => (
-              <li
-                key={c.corp_code}
-                onClick={() => handleSelect(c)}
-                className="cursor-pointer border-b border-slate-100 px-4 py-2 text-sm last:border-b-0 hover:bg-slate-50"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-slate-900">
-                    {c.corp_name}
-                  </span>
-                  {c.is_listed ? (
-                    <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">
-                      상장 {c.stock_code}
-                    </span>
-                  ) : (
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
-                      비상장
-                    </span>
-                  )}
-                  <span className="ml-auto font-mono text-xs text-slate-400">
-                    {c.corp_code} · 갱신 {formatDate(c.modify_date)}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
-
-      {selected && (
-        <Section step={2} title="연도 · 보고서 선택">
-          <div className="flex flex-wrap gap-3">
-            <select
-              value={year}
-              onChange={(e) => handleYearOrReprtChange(e.target.value, reprt)}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-            >
-              {YEARS.map((y) => (
-                <option key={y} value={y}>
-                  {y}년
-                </option>
-              ))}
-            </select>
-            <select
-              value={reprt}
-              onChange={(e) =>
-                handleYearOrReprtChange(year, e.target.value as ReprtCode)
-              }
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
-            >
-              {(Object.keys(REPRT_CODE_LABELS) as ReprtCode[]).map((c) => (
-                <option key={c} value={c}>
-                  {REPRT_CODE_LABELS[c]}
-                </option>
-              ))}
-            </select>
-          </div>
-        </Section>
-      )}
-
-      {selected && (check || checking) && (
-        <Section step={3} title="가용성 확인">
-          {checking && (
-            <p className="text-sm text-slate-500">
-              DART에서 데이터 가용성 확인중…
-            </p>
-          )}
-          {check && <AvailabilityPanel a={check} />}
-        </Section>
-      )}
-
-      {selected && check && (check.hasOFS || check.hasCFS) && (
-        <Section step={4} title="패키지 생성">
-          <label className="flex items-center gap-2 text-sm text-slate-700">
+      <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_360px]">
+        {/* 좌측: 검색 + 미리보기 */}
+        <div className="space-y-6">
+          <Section step={1} title="회사 검색">
             <input
-              type="checkbox"
-              checked={includeNotes}
-              onChange={(e) => setIncludeNotes(e.target.checked)}
-              disabled={!check.hasNotes}
+              type="text"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setPendingCorp(null);
+                setPendingCheck(null);
+              }}
+              placeholder="회사명 입력 (예: 키움증권)"
+              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-base focus:border-slate-500 focus:outline-none"
             />
-            <span>
-              주석 시트 포함{" "}
-              {!check.hasNotes && (
-                <span className="text-slate-400">
-                  (주석 데이터 없는 회사라 빈 시트로만 생성됨)
-                </span>
-              )}
-            </span>
-          </label>
-          <button
-            onClick={handleBuild}
-            disabled={building}
-            className="mt-4 rounded-lg bg-slate-900 px-6 py-3 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
-          >
-            {building ? "생성 중… (XBRL 다운로드 시 30~60초)" : "엑셀 패키지 다운로드"}
-          </button>
-        </Section>
-      )}
+            {searching && (
+              <p className="mt-2 text-xs text-slate-500">검색중…</p>
+            )}
+            {hits.length > 0 && (
+              <ul className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+                {hits.map((c) => (
+                  <li
+                    key={c.corp_code}
+                    onClick={() => handleSelect(c)}
+                    className="cursor-pointer border-b border-slate-100 px-4 py-2 text-sm last:border-b-0 hover:bg-slate-50"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-900">
+                        {c.corp_name}
+                      </span>
+                      {c.is_listed ? (
+                        <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">
+                          상장 {c.stock_code}
+                        </span>
+                      ) : (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+                          비상장
+                        </span>
+                      )}
+                      <span className="ml-auto font-mono text-xs text-slate-400">
+                        {c.corp_code} · 갱신 {formatDate(c.modify_date)}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
 
-      {error && (
-        <div className="mt-6 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
-          ⚠ {error}
+          {pendingCorp && (
+            <Section step={2} title="연도 · 보고서 · 역할">
+              <div className="flex flex-wrap gap-3">
+                <select
+                  value={pendingYear}
+                  onChange={(e) => changeYearOrReprt(e.target.value, pendingReprt)}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {YEARS.map((y) => (
+                    <option key={y} value={y}>
+                      {y}년
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={pendingReprt}
+                  onChange={(e) =>
+                    changeYearOrReprt(pendingYear, e.target.value as ReprtCode)
+                  }
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {(Object.keys(REPRT_CODE_LABELS) as ReprtCode[]).map((c) => (
+                    <option key={c} value={c}>
+                      {REPRT_CODE_LABELS[c]}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={pendingRole}
+                  onChange={(e) => setPendingRole(e.target.value)}
+                  placeholder="역할 (예: 모회사, 자회사1)"
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+              </div>
+            </Section>
+          )}
+
+          {pendingCorp && (pendingCheck || checking) && (
+            <Section step={3} title="가용성 확인">
+              {checking && (
+                <p className="text-sm text-slate-500">
+                  DART에서 데이터 가용성 확인중…
+                </p>
+              )}
+              {pendingCheck && <AvailabilityPanel a={pendingCheck} />}
+              {pendingCheck && (pendingCheck.hasOFS || pendingCheck.hasCFS) && (
+                <button
+                  onClick={addToCart}
+                  className="mt-4 rounded-lg bg-slate-900 px-5 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+                >
+                  + cart에 담기
+                </button>
+              )}
+            </Section>
+          )}
+
+          {error && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+              ⚠ {error}
+            </div>
+          )}
+
+          {bundleResult && <BundleReportPanel report={bundleResult} />}
         </div>
-      )}
+
+        {/* 우측: cart */}
+        <aside className="lg:sticky lg:top-6 self-start">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <h2 className="mb-3 text-sm font-semibold text-slate-900">
+              cart ({cart.length})
+            </h2>
+            {cart.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                회사를 검색해서 cart에 담으세요. 1개면 단일 .xlsx, 여러 개면
+                .zip으로 받습니다.
+              </p>
+            ) : (
+              <ul className="space-y-3">
+                {cart.map((item) => (
+                  <li
+                    key={item.id}
+                    className="rounded-lg border border-slate-200 p-3"
+                  >
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-slate-900">
+                          {item.corp.corp_name}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {item.role} · {item.year}년 ·{" "}
+                          {REPRT_CODE_LABELS[item.reprt]}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => removeFromCart(item.id)}
+                        className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        aria-label="제거"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="mt-2 flex gap-3 text-xs text-slate-700">
+                      <label className="flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={item.include_ofs}
+                          onChange={(e) =>
+                            updateCartItem(item.id, {
+                              include_ofs: e.target.checked,
+                            })
+                          }
+                        />
+                        별도
+                      </label>
+                      <label className="flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={item.include_cfs}
+                          onChange={(e) =>
+                            updateCartItem(item.id, {
+                              include_cfs: e.target.checked,
+                            })
+                          }
+                        />
+                        연결
+                      </label>
+                      <label className="flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={item.include_notes}
+                          onChange={(e) =>
+                            updateCartItem(item.id, {
+                              include_notes: e.target.checked,
+                            })
+                          }
+                        />
+                        주석
+                      </label>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {cart.length > 0 && (
+              <button
+                onClick={handleBundleDownload}
+                disabled={building}
+                className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+              >
+                {building
+                  ? `생성 중… (회사당 30~60초)`
+                  : cart.length === 1
+                    ? "단일 .xlsx 다운로드 (.zip 포장)"
+                    : `📦 ${cart.length}개 회사 .zip 다운로드`}
+              </button>
+            )}
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+type BundleItemReport = {
+  corp_code: string;
+  corp_name: string;
+  bsns_year: string;
+  reprt_code: string;
+  ok: boolean;
+  message: string;
+  filename?: string;
+};
+
+function BundleReportPanel({
+  report,
+}: {
+  report: { items: BundleItemReport[]; filename: string };
+}) {
+  const ok = report.items.filter((i) => i.ok).length;
+  const fail = report.items.length - ok;
+  return (
+    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+      <h3 className="mb-3 text-sm font-semibold text-emerald-900">
+        ✓ 다운로드 완료: {report.filename}
+      </h3>
+      <p className="mb-3 text-xs text-emerald-800">
+        성공 {ok} · 실패 {fail}
+      </p>
+      <ul className="space-y-1 text-xs">
+        {report.items.map((it, i) => (
+          <li
+            key={i}
+            className={
+              it.ok ? "text-emerald-900" : "text-rose-700 font-medium"
+            }
+          >
+            {it.ok ? "✓" : "✗"} {it.corp_name} · {it.bsns_year} ·{" "}
+            {it.reprt_code}
+            {it.ok ? "" : ` — ${it.message}`}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -269,7 +470,7 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
       <h2 className="mb-4 text-sm font-semibold text-slate-900">
         <span className="mr-2 inline-block rounded-full bg-slate-900 px-2 py-0.5 text-xs font-mono text-white">
           {step}
